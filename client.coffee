@@ -13,371 +13,370 @@ Form = require 'form'
 Icon = require 'icon'
 Toast = require 'toast'
 Event = require 'event'
-# Get config values, access with 'Config.<property>' (check 'config.common.coffee')
-CommonConfig = require 'config'
-Config = CommonConfig.getConfig()
+Map = require 'map'
+Markdown = require 'markdown'
 
-window.redraw = Obs.create(0) # For full redraw
-window.indicationArrowRedraw = Obs.create(0) # For indication arrow redraw
-window.checkinLocationFunctionId = undefined
+Shared = require 'shared'
 
-# ========== Events ==========
+### TODO
+- Switch to new latlong format
+- Reimplement some stat tracking
+- Work in sandbox
+- Events and log page to other files
+- Setup
+- Translate things
+###
+
+showPopupO = Obs.create() # Beacon key or -1 for user popup
+
+# =============== Events ===============
 # Main function, called when plugin is started
-exports.render = ->
-	log 'FULL RENDER 3'
-	Obs.onClean ->
+exports.render = !->
+	log 'FULL RENDER'
+	Obs.onClean !->
 		log 'FULL CLEAN'
-		window.inRangeCheckinCount[Plugin.groupCode()] = 0
-	#Server.send 'log', Plugin.userId(), Plugin.agent().android
-	version = Plugin.agent().android
-	if version?
-		if version <2.4 
-			Dom.text 'Sorry this game is unavailable for android version 2.3 or lower'
-			return 0
-	if not (window.inRangeCheckinRunning?)
-		window.inRangeCheckinRunning = {}
-	if not (inRangeCheckinRunning[Plugin.groupCode()]?)
-		window.inRangeCheckinRunning[Plugin.groupCode()] = false
-	if not (window.inRangeCheckinCount?)
-		window.inRangeCheckinCount = {}
-	if not (window.inRangeCheckinCount[Plugin.groupCode()]?)
-		window.inRangeCheckinCount[Plugin.groupCode()] = 0
+	if (version = Plugin.agent().android)? and version < 3.0
+		Dom.text 'Sorry this game is unavailable for android version 2.3 or lower'
+		log "Unsupported Android version: "+version
+		return
 
-	window.restoreMapLocation = true
-	log 'restoreMapLocation='+restoreMapLocation
-	#Server.call 'log', Plugin.userId(), "FULL RENDER"
-	loadOpenStreetMap()
-
-	Obs.observe ->
-		# Check if cleanup from last game is required
+	# Check if cleanup from last game is required
+	Obs.observe !->
 		local = Db.local.peek 'gameNumber'
 		remote = Db.shared.get 'gameNumber'
 		log 'Game cleanup checked, local=', local, ', remote=', remote
-		if !(local?) || local != remote
+		if !local? || local != remote
 			log ' Cleanup performed'
 			Db.local.set 'gameNumber', remote
 			# Do cleanup stuff
 			Db.local.remove 'currentSetupPage'
-			stopLocationSending()
 
-	# Ask for location
-	if !Geoloc.isSubscribed()
-		Geoloc.subscribe()
-		# gamestate check
-	Obs.observe ->
-		mainElement = document.getElementsByTagName("main")[0]
-		mainElement.setAttribute 'id', 'main'
-		window.inRangeCheckinCount[Plugin.groupCode()] = 0 # Player is active, reset count
-		redraw.get();
-		gameState = Db.shared.get('gameState')
-		if gameState is 0 # Setting up game by user that added plugin
-			setupContent()
-			Page.setTitle !->
-				Dom.text 'Conquest setup'
-			stopLocationSending()
-		else if gameState is 1 # Game is running
-			# Set page title
-			page = Page.state.get(0)
-			page = "main" if (not page? or page == '')
-			# Display the correct page
-			if page == 'main'
-				mainContent()
-				Obs.observe ->
-					nEnd = Db.shared.get('game', 'newEndTime')
-					end = Db.shared.get('game', 'endTime')
-					if nEnd? and nEnd isnt 0
-						end = nEnd		
-					# Make the subtitle black if the game is within 1 hour of ending
-					#log 'title end='+end+', nEdn='+nEnd
-					Page.setTitle !->
-						if (end - Plugin.time()) < 3600
-							Dom.text "Conquest ends "
-							Time.deltaText end
-							Dom.text "!"
-						else
-							Dom.text "Conquest ends "
-							Time.deltaText end
-			else if page == 'scores'
-				scoresContent()
-				Page.setTitle !->
-					Dom.text 'Conquest ranking'
-			else if page == 'log'
-				logContent()
-				Page.setTitle !->
-					Dom.text 'Conquest game events'
-		else if gameState is 2 # Game ended
-			page = Page.state.get(0)
-			page = "main" if (not page? or page == '')
-			if page == 'main'
-				endGameContent()
-				Page.setTitle !->
-					Dom.div !->
-						if Db.shared.peek( 'game', 'firstTeam') is getTeamOfUser(Plugin.userId())
-							Dom.text "Your team won!"
-						else
-							Dom.text "Your team lost!"
-			else if page == 'scores'
-				scoresContent()
-				Page.setTitle !->
-					Dom.text 'Conquest ranking'
-			else if page == 'log'
-				logContent()
-				Page.setTitle !->
-					Dom.text 'Conquest game events'				
-			stopLocationSending()		
-	Obs.observe ->
+	# Display correct page
+	Obs.observe !->
+		page = Page.state.get(0)
+		if page is "scores"
+			rankingPage()
+		else if page is "log"
+			eventsPage()
+		else
+			homePage()
+
+	# Make sure this device has a unique id
+	Obs.observe !->
 		deviceId = Db.local.peek 'deviceId'
 		if not deviceId?
 			result = Obs.create(null)
 			Server.send 'getNewDeviceId', Plugin.userId(), result.func()
-			Obs.observe ->
+			Obs.observe !->
 				if result.get()?
 					log 'Got deviceId ' + result.get()
 					Db.local.set 'deviceId', result.get()
 				else
-					log 'Did not get deviceId from server'
+					log 'Waiting for deviceId from the server'
+
 
 # Render info page (gear/info icon in top bar)
 exports.renderInfo = !->
-	window.inRangeCheckinCount[Plugin.groupCode()] = 0 # Player is active, reset count
-	Dom.text "On the main map there are several beacons. You need to venture to the real location of a beacon to conquer it. "
-	Dom.text "When you get in range of the beacon, you'll automatically start to conquer it. "
-	Dom.text "When the bar at the top of your screen has been filled with your team color, you've conquered the beacon. "
-	Dom.text "A neutral beacon will take 30 seconds to conquer, but an occupied beacon will take one minute. You first need to drain the opponents' color, before you can fill it with yours! "
-	Dom.br()
-	Dom.br()
-	Dom.h2 "Rewards and winning"
-	Dom.text "You gain "+Config.beaconValueInitial+" "
-	if Config.beaconValueInitial==1 then Dom.text "point" else Dom.text "points"
-	Dom.text " for being the first team to conquer a certain beacon. "
-	Dom.text "Beacons that are in possession of your team, will have a circle around it in your team color. "
-	Dom.text "Every hour the beacon is in your posession, it will generate "+Config.beaconHoldScore+" "
-	if Config.beaconHoldScore==1 then Dom.text "point" else Dom.text "points"
-	Dom.text ". "
-	Dom.text "Unfortunately for you, your beacons can be conquered by other teams. " 
-	Dom.text "Every time a beacon is conquered the value of the beacon will drop. Scores for conquering a beacon will decrease with "+Config.beaconValueDecrease+" until a minimum of "+Config.beaconValueMinimum+". "
-	Dom.text "The team with the highest score at the end of the game wins. "
-	Dom.text "If a team captures all beacons, the game will end quickly if the other teams stay inactive. "
-	Dom.h2 "Bugs and help"
-	Dom.text "Did you find a bug in the plugin? Do you have a question about the plugin that you cannot find the answer for? Contact 'thijs17' and we will try to answer you. If you are familiar with GitHub then you can also report the bug on our GitHub repository: "
-	Dom.a "https://github.com/VincentSmit/cappening/issues" # TODO: check how to get this link clickable
-	Dom.text "."
-							
+	Dom.div !->
+		Dom.style marginBottom: '-10px'
+	Markdown.render """
+	On the main map there are several beacons. You need to venture to the real location of a beacon to conquer it.
+	When you get in range of the beacon, you'll automatically start to conquer it.
+	When the bar at the top of your screen has been filled with your team color, you've conquered the beacon.
+	A neutral beacon will take 30 seconds to conquer, but an occupied beacon will take one minute. You first need to drain the opponents' color, before you can fill it with yours!
+	"""
+
+	Dom.h2 !->
+		Dom.style marginBottom: '-10px'
+		Dom.text tr('Rewards and winning')
+	Markdown.render """
+	You gain #{Shared.beaconValueInitial} #{if Shared.beaconValueInitial is 1 then "point" else "points"} for being the first team to conquer a certain beacon.
+	Beacons that are in possession of your team, will have a circle around it in your team color.
+	Every hour the beacon is in your posession, it will generate #{Shared.beaconHoldScore} #{if Shared.beaconHoldScore is 1 then "point" else "points"}.
+	Unfortunately for you, your beacons can be conquered by other teams.
+	Every time a beacon is conquered the value of the beacon will drop. Scores for conquering a beacon will decrease with #{Shared.beaconValueDecrease} until a minimum of #{Shared.beaconValueMinimum}.
+	The team with the highest score at the end of the game wins.
+	If a team captures all beacons, the game will end quickly if the other teams stay inactive.
+	"""
+
+	Dom.h2 !->
+		Dom.style marginBottom: '-10px'
+		Dom.text tr('Bugs and help')
+	Markdown.render """
+	Did you find a bug in the plugin? Do you have a question about the plugin that you cannot find the answer for? Contact 'thijs17' and we will try to answer you.
+	If you are familiar with GitHub then you can also report the bug on our [GitHub repository](https://github.com/VincentSmit/cappening/issues).
+	"""
+
 # Method that is called when admin changes settings (only restart game for now)
 exports.renderSettings = !->
 	if Db.shared
 		Form.check
 			name: 'restart'
-			text: tr 'Restart'
+			text: tr 'Restart the game'
 			sub: tr 'Check this to destroy the current game and start a new one.'
 
 
-# ========== Content fuctions ==========
+# =============== Content fuctions ===============
 #Method that renders bar on top of page.
-addBar = ->
-	Dom.div !->
-		Dom.style
-			height: "50px"
-			width: '100%'
-			top: '0'
-			left: '0'
-			position: 'absolute'
-			boxShadow: "0 3px 10px 0 rgba(0, 0, 0, 0.3)"
-			backgroundColor: hexToRGBA(Db.shared.peek('colors', getTeamOfUser(Plugin.userId()), 'hex'), 0.9)
-			_textShadow: '0 0 5px #000000, 0 0 5px #000000' 
-        # Button to event log
-		Dom.div !->
-			Icon.render data: 'clipboard', color: '#fff', size: 30, style: {verticalAlign: 'middle'}
+renderNavigationBar = !->
+	log "renderNavigationBar()"
+	addBar
+		top: true
+		order: 10
+		content: !->
+			Dom.style
+				height: "50px"
+				boxShadow: "0 3px 10px 0 rgba(0, 0, 0, 0.3)"
+				backgroundColor: hexToRGBA(Shared.teams[Shared.getTeamOfUser(Plugin.userId())].hex, 0.9)
+				_textShadow: '0 0 5px #000000, 0 0 5px #000000'
+	        # Button to event log
 			Dom.div !->
-				Dom.text 'Events'
-				Dom.style verticalAlign: 'middle', display: 'inline-block', marginLeft: '5px', fontSize: '13px'
-			Event.renderBubble ['log']
-			Dom.cls 'bar-button'
-			Dom.onTap !->   
-				Page.nav 'log'
-		# Button to scores page
-		Dom.div !->
+				Icon.render data: 'clipboard', color: '#fff', size: 30, style: {verticalAlign: 'middle'}
+				Dom.div !->
+					Dom.text 'Events'
+					Dom.style verticalAlign: 'middle', display: 'inline-block', marginLeft: '5px', fontSize: '13px'
+				Event.renderBubble ['log']
+				Dom.cls 'bar-button'
+				Dom.onTap !->
+					Page.nav 'log'
+			# Button to scores page
 			Dom.div !->
-				Dom.style 
-					width: '29px'
-					height: '30px'
-					verticalAlign: 'middle'
-					display: 'inline-block'
-					background: "url(#{Plugin.resourceUri('ranking.png')})"
-					backgroundRepeat: "no-repeat"
-					backgroundPosition: "0 0"
-					backgroundSize: "26px 26px"
-			Dom.div !->
-				Dom.text 'Ranking'
-				Dom.style verticalAlign: 'middle', display: 'inline-block', marginLeft: '5px', fontSize: '13px'
-			Dom.cls 'bar-button'
-			Dom.onTap !->   
-				Page.nav 'scores'
-
-#Renders the progress bar when a capture is happening 
-addProgressBar = ->
-	Obs.observe ->
-		Db.shared.iterate 'game', 'beacons', (beacon) !->
-			action = beacon.get('action') # Subscribe to changes in action, only thing that matters
-			inRangeValue = beacon.peek('inRange', Plugin.userId(), 'device')
-			if inRangeValue? and (inRangeValue == 'true' || inRangeValue == Db.local.get('deviceId'))
-				log 'Rendering progress bar'
-				Obs.onClean ->
-					log 'Cleaned progress bar...'
-				dbPercentage = beacon.peek("percentage")
-				nextPercentage = -1
-				ownTeam = getTeamOfUser(Plugin.userId())
-				nextColor = ""
-				owner = beacon.peek('owner')
-				nextOwner = beacon.peek('nextOwner')
-				actionStarted = beacon.peek("actionStarted")
-				barText = ""
-				if action == "capture"
-					nextPercentage=100
-					dbPercentage += (new Date() /1000 -actionStarted)/30 * 100
-					if dbPercentage > 100
-						dbPercentage = 100
-					if dbPercentage < 0
-						dbPercentage = 0
-					nextColor = Db.shared.peek('colors', nextOwner, 'hex')
-					barText = "Capturing..."
-				else if action == "recapture"
-					nextPercentage=100
-					dbPercentage += (new Date() /1000 -actionStarted)/30 * 100
-					if dbPercentage > 100
-						dbPercentage = 100
-					if dbPercentage < 0
-						dbPercentage = 0
-					nextColor = Db.shared.peek('colors', owner, 'hex')
-					if parseInt(ownTeam) is parseInt(owner)
-						barText = "Recapturing..."
-					else
-						barText = "Enemy is recapturing..."
-				else if action == "neutralize"
-					nextPercentage=0
-					dbPercentage -= (new Date() /1000 -actionStarted)/30 * 100
-					if dbPercentage < 0
-						dbPercentage = 0
-					if dbPercentage > 100
-						dbPercentage = 100
-					nextColor = Db.shared.peek('colors', owner, 'hex')
-					barText = "Neutralizing..."
-				else if action == "competing"
-					if owner == -1
-						nextColor = Db.shared.peek('colors', nextOwner, 'hex')
-					else
-						nextColor = Db.shared.peek('colors', owner, 'hex')
-					fromOtherTeams = 0
-					log 'fromOtherTeams='+fromOtherTeams+', nextPercentage='+nextPercentage+', dbPercentage='+dbPercentage
-					nextPercentage = dbPercentage
-					beacon.iterate 'inRange', (player) ->
-						if getTeamOfUser(player.key()) isnt ownTeam
-							fromOtherTeams++
-					if dbPercentage == 100 and owner == nextOwner
-						if parseInt(ownTeam) is parseInt(owner)
-							if fromOtherTeams > 1
-								barText = "Captured, but an enemy in range!"
-							else
-								barText = "Captured, but enemies in range!"
-						else
-							if fromOtherTeams > 1
-								barText = "Enemies are blocking the neutralize!"
-							else
-								barText = "An enemy is blocking the neutralize!"
-					else
-						if parseInt(owner) isnt -1
-							if parseInt(ownTeam) is parseInt(owner)
-								if fromOtherTeams > 1
-									barText = "Preventing neutralize by the enemies!"
-								else
-									barText = "Preventing neutralize by an enemy!"
-							else
-								if fromOtherTeams > 1
-									barText = "Enemies are preventing the neutralize!"
-								else
-									barText = "An enemy is preventing the neutralize!"
-						else
-							if parseInt(ownTeam) is parseInt(nextOwner)
-								if fromOtherTeams > 1
-									barText = "Enemies are preventing the capture!"
-								else
-									barText = "An enemy is preventing the capture!"
-							else
-								if fromOtherTeams > 1
-									barText = "Preventing capture by the enemies!"
-								else
-									barText = "Preventing capture by an enemy!"
-				else
-					nextPercentage = dbPercentage
-					if owner == -1
-						nextColor = Db.shared.peek('colors', nextOwner, 'hex')
-					else
-						nextColor = Db.shared.peek('colors', owner, 'hex')
-					barText = "Captured"						
-				time = 0
-				if nextPercentage != dbPercentage
-					time = Math.abs(dbPercentage-nextPercentage) * 300
-				log "nextPercentage = ", nextPercentage, ", dbPercentage = ", dbPercentage, ", time = ", time, ", action = ", action, "actionStarted=", actionStarted
 				Dom.div !->
 					Dom.style
-						height: "25px"
+						width: '29px'
+						height: '30px'
+						verticalAlign: 'middle'
+						display: 'inline-block'
+						background: "url(#{Plugin.resourceUri('ranking.png')})"
+						backgroundRepeat: "no-repeat"
+						backgroundPosition: "0 0"
+						backgroundSize: "26px 26px"
+				Dom.div !->
+					Dom.text 'Ranking'
+					Dom.style verticalAlign: 'middle', display: 'inline-block', marginLeft: '5px', fontSize: '13px'
+				Dom.cls 'bar-button'
+				Dom.onTap !->
+					Page.nav 'scores'
+
+# Location sharing bar
+renderLocationSharing = !->
+	Obs.observe !->
+		if !Geoloc.isSubscribed()
+			addBar
+				top: true
+				order: 20
+				content: !->
+					Dom.style
 						width: "100%"
-						position: 'absolute'
-						left: '0'
-						top: '50px'
-						boxShadow: 'rgba(0, 0, 0, 0.6) 0px 2px 6px 0px'
-						backgroundColor: 'rgba(0, 0, 0, 0.3)'
-						border: '0'
+						color: '#666'
+						padding: '0'
+						fontSize: '16px'
+						boxSizing: 'border-box'
+						backgroundColor: '#FFF'
+						_alignItems: 'center'
+						borderBottom: '1px solid #ccc'
+					Dom.div !->
+						Dom.style
+							Box: 'horizontal', backgroundColor: '#BA1A6E', color: '#fff'
+						Dom.div !->
+							Dom.style padding: "13px"
+							Icon.render data: 'map', color: '#fff', style: {position: "static", margin: "0"}, size: 24
+						Dom.div !->
+							Dom.style
+								Flex: true
+								padding: "8px 0 5px 0"
+							Dom.text tr('Tap to use your location')
+							Dom.div !->
+								Dom.style
+									fontSize: "75%"
+								Dom.text tr('Currently you cannot participate in the game')
+					Dom.onTap !->
+						Geoloc.subscribe()
+
+#Renders the progress bar when a capture is happening
+addProgressBar = !->
+	addBar
+		top: true
+		order: 0
+		content: !->
+			Db.shared.iterate 'game', 'beacons', (beacon) !->
+				action = beacon.get('action') # Subscribe to changes in action, only thing that matters
+				inRangeValue = beacon.peek('inRange', Plugin.userId(), 'device')
+				if inRangeValue? and (inRangeValue is 'true' || inRangeValue is Db.local.get('deviceId'))
+					log 'Rendering progress bar'
+					Obs.onClean !->
+						log 'Cleaned progress bar...'
+					dbPercentage = beacon.peek("percentage")
+					nextPercentage = -1
+					ownTeam = Shared.getTeamOfUser(Plugin.userId())
+					nextColor = ''
+					owner = beacon.peek('owner')
+					nextOwner = beacon.peek('nextOwner')
+					actionStarted = beacon.peek("actionStarted")
+					barText = ''
+					if action is "capture"
+						nextPercentage=100
+						dbPercentage += (new Date() /1000 -actionStarted)/30 * 100
+						if dbPercentage > 100
+							dbPercentage = 100
+						if dbPercentage < 0
+							dbPercentage = 0
+						nextColor = Shared.teams[nextOwner].hex
+						barText = "Capturing..."
+					else if action is "recapture"
+						nextPercentage=100
+						dbPercentage += (new Date() /1000 -actionStarted)/30 * 100
+						if dbPercentage > 100
+							dbPercentage = 100
+						if dbPercentage < 0
+							dbPercentage = 0
+						nextColor = Shared.teams[owner].hex
+						if parseInt(ownTeam) is parseInt(owner)
+							barText = "Recapturing..."
+						else
+							barText = "Enemy is recapturing..."
+					else if action is "neutralize"
+						nextPercentage=0
+						dbPercentage -= (new Date() /1000 -actionStarted)/30 * 100
+						if dbPercentage < 0
+							dbPercentage = 0
+						if dbPercentage > 100
+							dbPercentage = 100
+						nextColor = Shared.teams[owner].hex
+						barText = "Neutralizing..."
+					else if action is "competing"
+						if owner is -1
+							nextColor = Shared.teams[nextOwner].hex
+						else
+							nextColor = Shared.teams[owner].hex
+						fromOtherTeams = 0
+						log 'fromOtherTeams='+fromOtherTeams+', nextPercentage='+nextPercentage+', dbPercentage='+dbPercentage
+						nextPercentage = dbPercentage
+						beacon.iterate 'inRange', (player) !->
+							if Shared.getTeamOfUser(player.key()) isnt ownTeam
+								fromOtherTeams++
+						if dbPercentage is 100 and owner is nextOwner
+							if parseInt(ownTeam) is parseInt(owner)
+								if fromOtherTeams > 1
+									barText = "Captured, but an enemy in range!"
+								else
+									barText = "Captured, but enemies in range!"
+							else
+								if fromOtherTeams > 1
+									barText = "Enemies are blocking the neutralize!"
+								else
+									barText = "An enemy is blocking the neutralize!"
+						else
+							if parseInt(owner) isnt -1
+								if parseInt(ownTeam) is parseInt(owner)
+									if fromOtherTeams > 1
+										barText = "Preventing neutralize by the enemies!"
+									else
+										barText = "Preventing neutralize by an enemy!"
+								else
+									if fromOtherTeams > 1
+										barText = "Enemies are preventing the neutralize!"
+									else
+										barText = "An enemy is preventing the neutralize!"
+							else
+								if parseInt(ownTeam) is parseInt(nextOwner)
+									if fromOtherTeams > 1
+										barText = "Enemies are preventing the capture!"
+									else
+										barText = "An enemy is preventing the capture!"
+								else
+									if fromOtherTeams > 1
+										barText = "Preventing capture by the enemies!"
+									else
+										barText = "Preventing capture by an enemy!"
+					else
+						nextPercentage = dbPercentage
+						if owner is -1
+							nextColor = Shared.teams[nextOwner].hex
+						else
+							nextColor = Shared.teams[owner].hex
+						barText = "Captured"
+					time = 0
+					if nextPercentage != dbPercentage
+						time = Math.abs(dbPercentage-nextPercentage) * 300
+					log "nextPercentage = ", nextPercentage, ", dbPercentage = ", dbPercentage, ", time = ", time, ", action = ", action, "actionStarted=", actionStarted
 					Dom.div !->
 						Dom.style
 							height: "25px"
-							#background: '-moz-linear-gradient(top,  rgba(0,0,0,0) 0%, rgba(0,0,0,0.3) 100%)'
-							#background: '-webkit-gradient(linear, left top, left bottom, color-stop(0%,rgba(0,0,0,0)), color-stop(100%,rgba(0,0,0,0.3)))'
-							#background: '-webkit-linear-gradient(top,  rgba(0,0,0,0) 0%,rgba(0,0,0,0.3) 100%)'
-							#background: '-o-linear-gradient(top,  rgba(0,0,0,0) 0%,rgba(0,0,0,0.3) 100%)'
-							#background: '-ms-linear-gradient(top,  rgba(0,0,0,0) 0%,rgba(0,0,0,0.3) 100%)'
-							background_: 'linear-gradient(to bottom,  rgba(0,0,0,0) 0%,rgba(0,0,0,0.3) 100%)'
-							filter: "progid:DXImageTransform.Microsoft.gradient( startColorstr='#00000000', endColorstr='#4d000000',GradientType=0 )"
-							backgroundColor: nextColor
-							zIndex: "10"
-						Dom._get().style.width = dbPercentage + "%"
-						log "dbPercentage after balancing = ", dbPercentage
-						Dom._get().style.transition = "width " + time + "ms linear"
-						window.progressElement = Dom._get()
-						timer = () -> window.progressElement.style.width = nextPercentage + "%"
-						window.setTimeout(timer, 100)
-					Dom.div !->
-						Dom.text barText
-						Dom.style
-							width: '100%'
-							color: 'white'
-							marginTop: '-22px'
-							textAlign: 'center'
-							fontSize: '15px'
-							_textShadow: '0 0 5px #000000, 0 0 5px #000000' # Double for extra visibility
+							width: "100%"
+							position: 'absolute'
+							left: '0'
+							top: '50px'
+							boxShadow: 'rgba(0, 0, 0, 0.6) 0px 2px 6px 0px'
+							backgroundColor: 'rgba(0, 0, 0, 0.3)'
+							border: '0'
+						Dom.div !->
+							Dom.style
+								height: "25px"
+								background_: 'linear-gradient(to bottom,  rgba(0,0,0,0) 0%,rgba(0,0,0,0.3) 100%)'
+								backgroundColor: nextColor
+								zIndex: "10"
+							Dom._get().style.width = dbPercentage + "%"
+							Dom._get().style.transition = "width " + time + "ms linear"
+							window.progressElement = Dom._get()
+							timer = () !-> window.progressElement.style.width = nextPercentage + "%"
+							window.setTimeout(timer, 100)
+						Dom.div !->
+							Dom.text barText
+							Dom.style
+								width: '100%'
+								color: 'white'
+								marginTop: '-22px'
+								textAlign: 'center'
+								fontSize: '15px'
+								_textShadow: '0 0 5px #000000, 0 0 5px #000000' # Double for extra visibility
+
 #Renders bar when game is ended. Displays the winner and admin can restart the game
-addEndGameBar = ->
-	Dom.div !->
-		Dom.cls 'endGameBar'
-		Dom.style
-			backgroundColor: hexToRGBA(Db.shared.peek('colors', Db.shared.peek('game', 'firstTeam'), 'hex'), 0.9)
-		if parseInt(Db.shared.peek('game', 'firstTeam')) is parseInt(getTeamOfUser(Plugin.userId()))
-			Dom.text "Your team won the game!"
-		else
-			Dom.text "Team " + Db.shared.peek('colors', Db.shared.peek('game', 'firstTeam'), 'name') + " won, good luck next round!"
-		if Plugin.userIsAdmin() or Plugin.ownerId() is Plugin.userId()
-			Dom.style paddingRight: '145px'
+renderEndGameBar = !->
+	addBar
+		top: false
+		order: 10
+		content: !->
+			Dom.style
+				Box: 'horizontal'
+				padding: "7px 5px 7px 10px"
+				fontSize: '16px'
+				color: 'white'
+				_textShadow: '0 0 5px #000000, 0 0 5px #000000'
+				marginBottom: '30px'
+				_alignItems: 'center'
+				backgroundColor: hexToRGBA(Shared.teams[Db.shared.peek('game', 'firstTeam')].hex, 0.9)
 			Dom.div !->
-				Dom.cls 'restartButton'
-				Dom.text "RESTART GAME"
-				Dom.onTap !-> 
-					Server.call 'restartGame'
+				Dom.style Flex: true
+				if parseInt(Db.shared.peek('game', 'firstTeam')) is parseInt(Shared.getTeamOfUser(Plugin.userId()))
+					Dom.text "Your team won the game!"
+				else
+					Dom.text "Team " + Shared.teams[Db.shared.peek('game', 'firstTeam')].name + " won, good luck next round!"
+			if Shared.isAdmin()
+				Dom.div !->
+					Dom.style
+						height: "36px"
+					Dom.div !->
+						Dom.cls 'restartButton' # hover effect
+						Dom.style
+							backgroundColor: '#ba1a6e'
+							padding: '8px'
+							textAlign: 'center'
+							color: 'white'
+							lineHeight: '20px'
+							_boxShadow: '0 0 3px rgba(0,0,0,0.5)'
+							textTransform: 'uppercase'
+						Dom.text "Restart game"
+						Dom.onTap !->
+							Server.call 'restartGame'
 
 
-# ========== Page Contents ==========
+# =============== Page Contents ===============
 # Setup pages
-setupContent = ->
-	if Plugin.userIsAdmin() or Plugin.ownerId() is Plugin.userId()
+setupContent = !->
+	Page.setTitle !->
+		Dom.text 'Conquest setup'
+	if Shared.isAdmin()
 		currentPage = Db.local.get('currentSetupPage')
 		currentPage = 'setup0' if not currentPage?
 		log ' currentPage =', currentPage
@@ -421,7 +420,7 @@ setupContent = ->
 				Dom.div !->
 					log 'numberOfTeams.get(): ', numberOfTeams.get()
 					Dom.style margin: '0 0 20px 0', height: '50px'
-					renderTeamButton = (number) ->
+					renderTeamButton = (number) !->
 						Dom.div !->
 							Dom.text number
 							Dom.cls "team-button"
@@ -480,7 +479,7 @@ setupContent = ->
 					# Unit inputs
 					Dom.div !->
 						Dom.style float: 'left', paddingTop: '13px'
-						renderTimeButton = (unit) ->
+						renderTimeButton = (unit) !->
 							Dom.div !->
 								Dom.text unit
 								Dom.cls "time-button"
@@ -519,12 +518,11 @@ setupContent = ->
 					Dom.onTap !->
 						Db.local.set('currentSetupPage', 'setup2')
 			renderMap()
-			renderBeacons()
-			Obs.observe ->
+			Obs.observe !->
 				if mapReady()
 					# Setup map corners
 					# Update the play area square thing
-					markerDragged = ->
+					markerDragged = !->
 						if mapReady()
 							Server.sync 'setBounds', window.locationOne.getLatLng(), window.locationTwo.getLatLng(), !->
 								log 'predicting bounds change'
@@ -539,7 +537,7 @@ setupContent = ->
 						lng1 = 6.8396973609924
 					loc1 = L.latLng(lat1, lng1)
 					window.locationOne = L.marker(loc1, {draggable: true})
-					locationOne.on 'dragend', ->
+					locationOne.on 'dragend', !->
 						log 'marker drag 1'
 						markerDragged()
 					locationOne.addTo(map)
@@ -551,13 +549,13 @@ setupContent = ->
 						lng2 = 6.8598246574402
 					loc2 = L.latLng(lat2, lng2)
 					window.locationTwo = L.marker(loc2, {draggable: true})
-					locationTwo.on 'dragend', ->
+					locationTwo.on 'dragend', !->
 						log 'marker drag 2'
 						markerDragged()
 					locationTwo.addTo(map)
 					window.boundaryRectangle = L.rectangle([loc1, loc2], {color: "#ff7800", weight: 5, clickable: false})
 					boundaryRectangle.addTo(map)
-				Obs.onClean ->
+				Obs.onClean !->
 					log 'onClean() rectangle + corners'
 					if mapReady()
 						map.removeLayer locationOne if locationOne?
@@ -619,8 +617,7 @@ setupContent = ->
 					else
 						Dom.cls 'stepbar-disable'
 			renderMap()
-			renderBeacons()
-			Obs.observe ->
+			Obs.observe !->
 				if mapReady()
 					loc1 = L.latLng(Db.shared.get('game', 'bounds', 'one', 'lat'), Db.shared.get('game', 'bounds', 'one', 'lng'))
 					loc2 = L.latLng(Db.shared.get('game', 'bounds', 'two', 'lat'), Db.shared.get('game', 'bounds', 'two', 'lng'))
@@ -629,7 +626,7 @@ setupContent = ->
 						window.boundaryRectangle = L.rectangle([loc1, loc2], {color: "#ff7800", weight: 5, fillOpacity: 0.05, clickable: false})
 						boundaryRectangle.addTo(map)
 						map.on('contextmenu', addMarkerListener)
-				Obs.onClean ->
+				Obs.onClean !->
 					log 'onClean() rectangle'
 					if mapReady()
 						map.removeLayer boundaryRectangle if boundaryRectangle?
@@ -681,7 +678,6 @@ setupContent = ->
 					,['ok', tr("Ok")]
 	else
 		renderMap()
-		renderBeacons()
 		Dom.div !->
 			Dom.cls 'infobar'
 			Dom.style top: '0', bottom: 'auto'
@@ -700,37 +696,69 @@ setupContent = ->
 				Dom.text "The admin/plugin owner is setting up a new game."
 
 # Home page with map
-mainContent = ->
-	log "mainContent()"
-	addBar()
-	addProgressBar()
-	renderMap()
-	renderBeacons()
+homePage = !->
+	log "homePage()"
+	renderLocationSharing()
+	map = renderMap()
+	Obs.observe !->
+		gameState = Db.shared.get("gameState")
+		if gameState is 0
+			# TODO: render setup stuff
+		else if gameState is 1
+			renderNavigationBar()
+			addProgressBar()
+			performTutorial()
+			renderBeacons map
+
+			nEnd = Db.shared.get('game', 'newEndTime')
+			end = Db.shared.get('game', 'endTime')
+			if nEnd? and nEnd isnt 0
+				end = nEnd
+			Page.setTitle !->
+				Time.deltaText end, "default", (value) !->
+					Dom.text "Conquest has "+value.replace("in ", '')+" left"
+				if (end - Plugin.time()) < 3600
+					Dom.text "!"
+		else if gameState is 2
+			renderNavigationBar()
+			renderEndGameBar()
+			renderBeacons map
+
+			Page.setTitle !->
+				if Db.shared.peek("game", "firstTeam") is Shared.getTeamOfUser(Plugin.userId())
+					Dom.text "Your team won!"
+				else
+					Dom.text "Your team lost!"
+	renderBars()
+
+# Show tutorial info if the user has not seen that yet
+performTutorial = !->
 	#Tutorial for playing this game the first time
-	userId = Plugin.userId()
 	tutorial = Db.personal.peek('tutorialState', 'mainContent')
-	if undefined is tutorial
-		Server.send 'updateTutorialState', userId, 'mainContent'
+	if !tutorial?
+		Server.sync 'updateTutorialState', Plugin.userId(), 'mainContent', !->
+			Db.personal.set 'tutorialState', content, 1
 		Modal.show tr("Are you ready to capture your first beacon?"), !->
 			Dom.div tr("Walk towards the indicated area's on the map to capture a beacon.")
 			Dom.div tr("You will be awarded points for capturing a beacon, and for holding it.")
 			Dom.div tr("Tip: Capture all beacons with your team and win in one hour!")
-		, (ok)->
-			ok= undefined;
-		,['ok', tr("Got it")]
-	
-# Scores page
-scoresContent = ->
+		, undefined
+		, ['ok', tr("Got it")]
+
+# Ranking page
+rankingPage = !->
+	Page.setTitle !->
+		Dom.text 'Conquest ranking'
 	Ui.list !->
 		Dom.style
 			padding: '0'
 		Db.shared.iterate 'game', 'teams', (team) !->
-			teamColor = Db.shared.peek('colors', team.key(), 'hex')
-			teamName = Db.shared.peek('colors', team.key(), 'name')
+			teamColor = Shared.teams[team.key()].hex
+			teamName = Shared.teams[team.key()].name
 			teamScore = Db.shared.get('game', 'teams', team.key(), 'teamScore')
 			# list of teams and their scores
 			expanded = Obs.create(false)
-			Ui.item !->				
+			Ui.item !->
 				Dom.style
 					padding: '14px'
 					minHeight: '71px'
@@ -750,7 +778,7 @@ scoresContent = ->
 							paddingTop: "12px"
 							textAlign: "center"
 							color: "white"
-							paddingRight: if rank==1 then '10px' else '15px'
+							paddingRight: if rank is 1 then '10px' else '15px'
 						Dom.text rank
 						rankingSuffix = {1: "st", 2: "nd", 3: "rd", 4: "th", 5: "th", 6: "th"}
 						Dom.div !->
@@ -758,12 +786,12 @@ scoresContent = ->
 							Dom.style
 							    position: 'absolute'
 							    fontSize: '17px'
-							    left: if rank==1 then '38px' else '40px'
+							    left: if rank is 1 then '38px' else '40px'
 							    top: '15px'
 				Dom.div !->
-					Dom.style Flex: 1, fontSize: '100%', paddingLeft: '84px'
+					Dom.style fontSize: '100%', paddingLeft: '84px'
 					Dom.text "Team " + teamName + " scored " + teamScore + " points"
-					if parseInt(team.key()) is parseInt(getTeamOfUser(Plugin.userId()))
+					if parseInt(team.key()) is parseInt(Shared.getTeamOfUser(Plugin.userId()))
 						Dom.style fontWeight: 'bold'
 					#log 'users: ', Plugin.users, ', length: ', Plugin.users.count().peek()
 					# To Do expand voor scores
@@ -799,31 +827,32 @@ scoresContent = ->
 		, (team) -> [team.get('ranking')]
 
 # Eventlog page
-logContent = ->
+eventsPage = !->
+	Page.setTitle !->
+		Dom.text 'Conquest game events'
 	Event.showStar tr('Game events')
 	Ui.list !->
 		Dom.style
 			padding: '0'
 		Db.shared.iterate 'game', 'eventlist', (capture) !->
 			if capture.key() != "maxId"
-				#log 'capture' 
 				Ui.item !->
 					Dom.style
 						padding: '14px'
 					if capture.peek('type') is "capture" and mapReady()
 						beaconId = capture.peek('beacon')
 						teamId = capture.peek('conqueror')
-						teamColor = Db.shared.peek('colors', teamId, 'hex')
-						teamName = Db.shared.peek('colors', teamId, 'name')
+						teamColor = Shared.teams[teamId].hex
+						teamName = Shared.teams[teamId].name
 						Dom.onTap !->
-							viewSet = ->
+							viewSet = !->
 								map.setView(L.latLng(Db.shared.peek('game', 'beacons' ,beaconId, 'location', 'lat'), Db.shared.peek('game', 'beacons' ,beaconId, 'location', 'lng')), 16)
 							setTimeout(viewSet, 50)
 							Toast.show !->
 								Dom.text 'Captured '
 								Time.deltaText(capture.peek('timestamp'))
 								if capture.peek('members')?
-									Dom.text " by " + userStringToFriendly(capture.peek('members')) + ' of team ' + teamName
+									Dom.text " by " + Shared.userStringToFriendly(capture.peek('members')) + ' of team ' + teamName
 								else
 									Dom.text ' by team '+teamName
 							Page.back()
@@ -832,14 +861,14 @@ logContent = ->
 								width: '70px'
 								height: '70px'
 								marginRight: '10px'
-								background: teamColor+" url(#{Plugin.resourceUri('marker-plain.png')}) no-repeat 10px 10px" 
+								background: teamColor+" url(#{Plugin.resourceUri('marker-plain.png')}) no-repeat 10px 10px"
 								backgroundSize: '50px 50px'
 						Dom.div !->
 							Dom.style Flex: 1, fontSize: '100%'
 							if Event.isNew(capture.peek('timestamp'))
 								Dom.style color: '#5b0'
 							if capture.peek('members')?
-								Dom.text userStringToFriendly(capture.peek('members')) + ' of team ' + teamName + ' captured a beacon'
+								Dom.text Shared.userStringToFriendly(capture.peek('members')) + ' of team ' + teamName + ' captured a beacon'
 							else
 								Dom.text "Team " + teamName + " captured a beacon"
 							Dom.div !->
@@ -849,18 +878,18 @@ logContent = ->
 					else if capture.peek('type') is "captureAll"
 						beaconId = capture.peek('beacon')
 						teamId = capture.peek('conqueror')
-						teamColor = Db.shared.peek('colors', teamId, 'hex')
-						teamName = Db.shared.peek('colors', teamId, 'name')
+						teamColor = Shared.teams[teamId].hex
+						teamName = Shared.teams[teamId].name
 						log "print capture: teamId; " + teamId
 						Dom.onTap !->
-							viewSet = ->
+							viewSet = !->
 								map.setView(L.latLng(Db.shared.peek('game', 'beacons', beaconId, 'location', 'lat'), Db.shared.peek('game', 'beacons', beaconId, 'location', 'lng')), 16)
 							setTimeout(viewSet, 50)
 							Toast.show !->
 								Dom.text 'Captured '
 								Time.deltaText(capture.peek('timestamp'))
 								if capture.peek('members')?
-									Dom.text " by " + userStringToFriendly(capture.peek('members')) + ' of team ' + teamName
+									Dom.text " by " + Shared.userStringToFriendly(capture.peek('members')) + ' of team ' + teamName
 								else
 									Dom.text ' by team '+teamName
 							Page.back()
@@ -877,16 +906,15 @@ logContent = ->
 								Dom.style color: '#5b0'
 							Dom.text "Team " + teamName + " team captured all beacons"
 							if capture.peek('members')?
-								Dom.text " thanks to " + userStringToFriendly(capture.peek('members'))
+								Dom.text " thanks to " + Shared.userStringToFriendly(capture.peek('members'))
 							Dom.div !->
 								Dom.style fontSize: '75%', marginTop: '6px'
 								Dom.text "Captured "
 								Time.deltaText capture.peek('timestamp')
 					else if capture.peek('type') is "score"
 						teamId = capture.peek('leading')
-						teamColor = Db.shared.peek('colors', teamId, 'hex')
-						teamName = Db.shared.peek('colors', teamId, 'name')
-						#log "print score: teamId; " + teamId
+						teamColor = Shared.teams[teamId].hex
+						teamName = Shared.teams[teamId].name
 						Dom.onTap !->
 							Page.nav 'scores'
 						Dom.div !->
@@ -956,8 +984,8 @@ logContent = ->
 									Time.deltaText started
 					else if capture.peek('type') is "end"
 						teamId = Db.shared.peek('game', 'firstTeam')
-						teamColor = Db.shared.peek('colors', teamId, 'hex')
-						teamName = Db.shared.peek('colors', teamId, 'name')
+						teamColor = Shared.teams[teamId].hex
+						teamName = Shared.teams[teamId].name
 						Dom.style
 							padding: '14px'
 						Dom.div !->
@@ -980,305 +1008,92 @@ logContent = ->
 									Time.deltaText started
 		, (capture) -> (-capture.key())
 
-# End game main content page
-endGameContent = ->
-	log "endGameContent()"
-	addBar()
-	renderMap()
-	renderBeacons()
-	#mModal.show("Team " + Db.shared.peek('colors', Db.shared.peek('game', 'winningTeam'), 'name') + " won the game!")
-	addEndGameBar()
 
-
-# ========== Map functions ==========
+# =============== Map functions ===============
 # Render a map
 renderMap = ->
-	log " renderMap()"
-	# Insert map element
-	Obs.observe ->
-		if mapElement?
-			# use it again
-			mainElement = document.getElementsByTagName("main")[0]
-			mainElement.insertBefore(mapElement, mainElement.childNodes[0])  # Inserts the element at the start
-			if mapReady()
-				map.invalidateSize(true)
-			log "Reused html element for map"
-		else
-			window.mapElement = document.createElement "div"
-			mapElement.setAttribute 'id', 'OpenStreetMap'
-			mainElement = document.getElementsByTagName("main")[0]
-			mainElement.insertBefore(mapElement, mainElement.childNodes[0])  # Inserts the element at the start
-			if mapReady()
-				map.invalidateSize(true)
-			log "Created html element for map"
-		Obs.onClean ->
-			log "Removed html element for map (stored for later)"
-			toRemove = document.getElementById('OpenStreetMap');
-			toRemove.parentNode.removeChild(toRemove);
-	setupMap()
-	renderLocation();
-
-#Loads Open Street Map, so it can be inserted into the html
-loadOpenStreetMap = ->
-	log "loadOpenStreetMap()"
-	# Only insert these the first time
-	if(not document.getElementById("mapboxJavascript")?) or (not (Db.local.peek('newMap6')?))
-		if (not (Db.local.peek('newMap6')?))
-			if map?
-				map.remove()
-			window.beaconCurrentLocation = undefined
-			window.L = undefined
-			window.map = undefined
-			Db.local.set('newMap6', 1)
-			log 'Refreshing map'
-		log "Started loading OpenStreetMap files"
-		# Insert CSS
-		css = document.createElement "link"
-		css.setAttribute "rel", "stylesheet"
-		css.setAttribute "type", "text/css"
-		css.setAttribute "id", "mapboxCSS"
-		css.setAttribute "href", "https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.3/leaflet.css"
-		document.getElementsByTagName("head")[0].appendChild css
-		
-		# Insert javascript
-		javascript = document.createElement 'script'
-		javascript.setAttribute 'type', 'text/javascript'
-		javascript.setAttribute 'id', 'mapboxJavascript'
-		if javascript.readyState  # Internet Explorer
-			javascript.onreadystatechange = ->
-				if javascript.readyState == "loaded" || javascript.readyState == "complete"
-					log "OpenStreetMap files loaded"
-					javascript.onreadystatechange = 'null'
-					redraw.incr()
-		else  # Other browsers
-			javascript.onload = ->
-				log "OpenStreetMap files loaded"
-				redraw.incr()
-		javascript.setAttribute 'src', 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.3/leaflet.js'
-		document.getElementsByTagName('head')[0].appendChild javascript
-	else 
-		log "OpenStreetMap files already loaded"
-
-# Initialize the map with tiles
-setupMap = ->
-	Obs.observe ->
-		log "setupMap()"
-		saveMapLocation = () ->
-			Db.local.set('mapLocation', 'lat', map.getCenter().lat)
-			Db.local.set('mapLocation', 'lng', map.getCenter().lng)
-			Db.local.set('mapLocation', 'zoom', map.getZoom())
-		if map?
-			log "map already initialized"
-			limitToBounds()
-			map.on('moveend', saveMapLocation)
-			restoreMapLocationNow()
-		else if not L?
-			log "javascript not yet loaded"
-		else
-			# Tile version
-			maxZoom = 18
-			if Plugin.agent().android? or Plugin.agent().ios?
-				maxZoom = 17
-			window.map = L.map('OpenStreetMap', {center: [52.249822176849, 6.8396973609924], zoom: 13, zoomControl:false, updateWhenIdle:false, detectRetina:true, reuseTiles: true, minZoom: 3, maxZoom: maxZoom})
-			# Add proper attribution for OpenStreetMap, Leaflet and MapQuest
-			map.attributionControl.addAttribution('© <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> | <a href="http://leafletjs.com/" target="_blank">Leaflet</a> | <a href="http://www.mapquest.com/" target="_blank">MapQuest</a>');
-			map.attributionControl.setPrefix('') # Hide the attribution added by default for Leaflet (line above already includes it)
-			
-			# Default OpenStreetMap tiles (quite busy and distracting)
-			###
-			L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-				attribution: '&copy; <a href="http://osm.org/copyright">OpenStreetMap</a> contributors'
-				detectRetina: true
-			}).addTo(map);
-			###
-			
-			# CartoDB dark tiles (not much contrast and brightness...)
-			###
-			L.tileLayer('https://cartodb-basemaps-{s}.global.ssl.fastly.net/dark_all/{z}/{x}/{y}.png', {
-				attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, &copy; <a href="http://cartodb.com/attributions">CartoDB</a>'
-			}).addTo(map);
-			# brighter and more contrast
-			img.leaflet-tile.leaflet-tile-loaded {
-				-webkit-filter: contrast(110%) brightness(200%);
-			}
-			###
-
-			# MapQuest tiles
-			L.tileLayer('https://otile{s}-s.mqcdn.com/tiles/1.0.0/map/{z}/{x}/{y}.png', {
-				detectRetina: true
-				subdomains: ['1', '2', '3', '4']
-			}).addTo(map);
-
-			log "Initialized MapBox map"
-			limitToBounds()
-			map.on('moveend', saveMapLocation)
-			restoreMapLocationNow()
-		Obs.onClean ->
-			if mapReady()
-				map.off('moveend', saveMapLocation)
-
-# Setup map bounds
-limitToBounds = ->
-	Obs.observe ->
-		log "Map bounds and minzoom set"
-		if mapReady() and Db.shared.get('gameState') is 1
-			###
-			# Limit scrolling to the bounds and also limit the zoom level
-			loc1 = L.latLng(Db.shared.get('game', 'bounds', 'one', 'lat'), Db.shared.get('game', 'bounds', 'one', 'lng'))
-			loc2 = L.latLng(Db.shared.get('game', 'bounds', 'two', 'lat'), Db.shared.get('game', 'bounds', 'two', 'lng'))
-			bounds = L.latLngBounds(loc1, loc2)
-			if bounds? and loc1? and loc2?
-				map._layersMinZoom = map.getBoundsZoom(bounds.pad(0.05))
-				map.setMaxBounds(bounds.pad(0.05))
-				limit = () -> 
-					map._layersMinZoom = map.getBoundsZoom(bounds.pad(0.05))
-					map.setMaxBounds(bounds.pad(0.05))
-				window.setTimeout(limit, 100)
-				#map.fitBounds(bounds); # Causes problems, because it zooms to max all the time
-			else
-				log "Bounds not existing"
-			###
-			Obs.onClean ->
-				if map?
-					log "  Map bounds and minzoom reset"
-					map.setMaxBounds()
-					map._layersMinZoom = 0
-
-# Zoom to fit map bounds
-zoomToBounds = ->
-	Obs.observe ->
-		log "Zoomed to bounds"
-		if mapReady()
-			# Limit scrolling to the bounds and also limit the zoom level
-			loc1 = L.latLng(Db.shared.get('game', 'bounds', 'one', 'lat'), Db.shared.get('game', 'bounds', 'one', 'lng'))
-			loc2 = L.latLng(Db.shared.get('game', 'bounds', 'two', 'lat'), Db.shared.get('game', 'bounds', 'two', 'lng'))
-			bounds = L.latLngBounds(loc1, loc2)
-			if loc1? and loc2? and bounds?
-				map.fitBounds(bounds.pad(0.05));
-
-# Called when map is redrawn. Map is centered around your own lastest recieved location
-restoreMapLocationNow = ->
-	log 'restoreMapLocationNow() called, restoreMapLocation='+window.restoreMapLocation+', mapLocation='+JSON.stringify(Db.local.peek('mapLocation'))
-	if mapReady() and Db.local.peek('mapLocation')? and window.restoreMapLocation? and window.restoreMapLocation
-		location = convertLatLng(Db.local.peek('mapLocation'))
-		zoom = Db.local.peek('mapLocation', 'zoom')
-		log '  restoring: location='+location+', zoom='+zoom
-		map.setView(location, zoom)
-	window.restoreMapLocation = false
+	log "renderMap()"
+	Dom.style padding: "0"
+	gameState = Db.shared.get 'gameState'
+	map = Map.render
+		zoom: Db.local.peek('lastMapZoom') ? 12
+		minZoom: 2
+		clustering: true
+		clusterRadius: 45
+		clusterSpreadMultiplier: 2
+		latlong: Db.local.peek('lastMapLocation') ? "52.444553, 5.740644"
+	, (map) !->
+		# Save location+zoom for restoring later
+		Obs.observe !->
+			Db.local.set 'lastMapLocation', map.getLatlong()
+			Db.local.set 'lastMapZoom', map.getZoom()
+		renderLocation map
+	return map
 
 # Add beacons to the map
-renderBeacons = ->
-	log "rendering beacons"
+renderBeacons = (map) !->
+	log "renderBeacons()"
 	Db.shared.iterate 'game', 'beacons', (beacon) !->
-		beaconKey = beacon.key() # save the key for the onClean
-		markerDelClick = undefined
-		if mapReady() and map?
-			# Add the marker to the map
-			if not window.beaconMarkers?
-				log "beaconMarkers list reset"
-				window.beaconMarkers = {};
-			teamNumber = beacon.get('owner')
-			if teamNumber isnt undefined
-				teamColor=  Db.shared.peek('colors', teamNumber, 'hex')
-				
-				areaIcon = L.icon({
-					iconUrl: Plugin.resourceUri(teamColor.substring(1) + '.png'),
-					iconSize:     [24, 40], 
-					iconAnchor:   [12, 39], 
-					popupAnchor:  [0, -40]
-					shadowUrl: Plugin.resourceUri('markerShadow.png'),
-					shadowSize: [41, 41],
-					shadowAnchor: [12, 39]
-				});
-				
-				location = L.latLng(beacon.get('location', 'lat'), beacon.get('location', 'lng'))
-				marker = L.marker(location, {icon: areaIcon})
-
-				circle = L.circle(location, Db.shared.get('game', 'beaconRadius'), {
-					color: teamColor,
-					fillColor: teamColor,
-					fillOpacity: 0.3
-					weight: 2
-				});
-				if Db.shared.peek('gameState') == 0 and Db.local.get('currentSetupPage') == 'setup2' 
-					markerDelClick = (e) ->
-						map.removeLayer circle
-						map.removeLayer marker
-						Server.send 'deleteBeacon', Plugin.userId(), e.latlng
-					marker.on('dblclick', markerDelClick)
-					marker.on('contextmenu', markerDelClick)					
-				else if Db.shared.peek('gameState') != 0				
-					popupString = ""
-					if parseInt(beacon.peek('owner')) is parseInt(getTeamOfUser(Plugin.userId()))
-						popupString += "Beacon owned by your team."
-						if Config.beaconHoldScore == 1
-							popupString += "<br>Scoring "+Config.beaconHoldScore+" point per hour while held."
-						else
-							popupString += "<br>Scoring "+Config.beaconHoldScore+" points per hour while held."
-					else
-						popupString += "Beacon owned by team " + Db.shared.peek('colors', beacon.peek('owner'), 'name') + "."
-					popupString += "<br>Next capture gives " + beacon.peek('captureValue') + " points."
-
-					selfInRange = false
-					beacon.iterate 'inRange', (player) !->
-						if parseInt(player.key()) is parseInt(Plugin.userId())
-							selfInRange = true
-					if selfInRange
-						inrange = getInRange(beacon)
-						if inrange?
-							popupString += "<br>In range players: " + inrange
-
-					popup = L.popup()
-						.setLatLng(location)
-						.setContent(popupString)
-					marker.bindPopup(popup,  {closeOnClick: true, closeButton: false})
-					markerClick = () -> 
-						beaconMarkers[beacon.key()].togglePopup()		
-					marker.on('contextmenu', markerClick)
-				marker.addTo(map)
-				beaconMarkers[beacon.key()] = marker
-				#log 'Added marker, marker list: ', beaconMarkers
-				
-				# Add the area circle to the map 
-				if not window.beaconCircles?
-					log "beaconCircles list reset"
-					window.beaconCircles = {}
-
-				# Open the popup of the marker
-				if Db.shared.peek('gameState') == 0 and Db.local.get('currentSetupPage') == 'setup2'
-					circleDelClick = () ->
-						map.removeLayer circle
-						map.removeLayer marker
-						Server.send 'deleteBeacon', Plugin.userId(), circle.getLatLng()
-					circle.on('dblclick', circleDelClick)
-					circle.on('contextmenu', circleDelClick)
-				else if Db.shared.peek('gameState') != 0
-					circleClick = () -> 
-						beaconMarkers[beacon.key()].togglePopup()		
-					circle.on('contextmenu', circleClick)
-					circle.on('click', circleClick)
-				circle.addTo(map)
-				beaconCircles[beaconKey] = circle
-				log "Added beacon and circle"
-		else 
-			log "map not ready yet"
-		Obs.onClean ->
-			if beaconMarkers? and map? and beaconCircles?
-				if markerDelClick?
-					marker.off('dblclick', markerDelClick)
-					marker.off('contextmenu', markerDelClick)
-				log 'onClean() beacon+circle'
-				if beaconMarkers[beaconKey]?
-					map.removeLayer beaconMarkers[beaconKey]
-					delete beaconMarkers[beaconKey]
-				if beaconCircles[beaconKey]?
-					map.removeLayer beaconCircles[beaconKey]
-					delete beaconCircles[beaconKey]
-	, (beacon) ->
-		-beacon.get()	
+		teamNumber = beacon.get('owner') ? -1
+		teamColor =  Shared.teams[teamNumber].hex
+		location = beacon.get("location", "lat")+","+beacon.get("location", "lng")
+		map.marker location, !->
+			Dom.style
+				width: "22px"
+				height: "40px"
+				margin: "-40px 0 0 -11px"
+			# Popup div
+			Obs.observe !->
+				if showPopupO.get() is beacon.key()
+					renderPopup
+						content: !->
+							Dom.style
+								whiteSpace: 'normal'
+							if (owner = +beacon.peek('owner')) is +Shared.getTeamOfUser(Plugin.userId())
+								Dom.text tr('Owned by your team')
+								if Shared.beaconHoldScore is 1
+									subtext = tr('Scoring %1 point per hour while held', Shared.beaconHoldScore)
+								else
+									subtext = tr('Scoring %1 points per hour while held', Shared.beaconHoldScore)
+								smallText subtext
+							else if owner is -1
+								Dom.text tr('Neutral beacon')
+							else
+								Dom.text tr('Owned by team %1', Shared.teams[owner].name)
+							smallText tr('Next capture gives %1 points', beacon.peek('captureValue'))
+							selfInRange = false
+							beacon.iterate 'inRange', (player) !->
+								selfInRange = selfInRange || +player.key() is +Plugin.userId()
+							if selfInRange and (inrange = getInRange(beacon))?
+								Dom.text tr('In range players: %1', inrange)
+						width: 150
+						anchor: 'bottom'
+			Dom.div !->
+				Dom.style
+					width: "22px"
+					height: "40px"
+					background: "50% 100% no-repeat url("+Plugin.resourceUri(teamColor.substring(1) + ".png")+")"
+					backgroundSize: "contain"
+			# Popup trigger
+			Dom.onTap !->
+				if showPopupO.peek() is beacon.key()
+					showPopupO.set ''
+				else
+					showPopupO.set beacon.key()
+		radius = Db.shared.get('game', 'beaconRadius')
+		map.circle location, radius,
+			color: teamColor
+			fillColor: teamColor
+			fillOpacity: 0.3
+			weight: 2
+			onTap: !->
+				if showPopupO.peek() is beacon.key()
+					showPopupO.set ''
+				else
+					showPopupO.set beacon.key()
 
 # Listener that checks for clicking the map
-addMarkerListener = (event) ->
+addMarkerListener = (event) !->
 	log 'click: ', event
 	beaconRadius = Db.shared.get('game', 'beaconRadius')
 	#Check if marker is not close to other marker
@@ -1296,18 +1111,18 @@ addMarkerListener = (event) ->
 		outsideGame = !boundaryRectangle.getBounds().contains(event.latlng)
 		if outsideGame
 			result = 'Beacon is outside the game border'
-		
+
 	if tooClose or outsideGame
-		Modal.show(result)		
+		Modal.show(result)
 	else
 		Server.sync 'addMarker', Plugin.userId(), event.latlng, !->
-			Obs.observe ->
+			Obs.observe !->
 				log 'Prediction add marker'
 				number = Math.floor((Math.random() * 10000) + 200)
 				Db.shared.set 'game', 'beacons', number, {location: {lat: event.latlng.lat, lng: event.latlng.lng}, owner: -1}
-	
+
 # Listener for updating your location indicator
-indicationArrowListener = () ->
+indicationArrowListener = () !->
 	indicationArrowRedraw.incr()
 	window.inRangeCheckinCount[Plugin.groupCode()] = 0 # Player is active, reset count
 
@@ -1325,7 +1140,7 @@ mapReady = ->
 	return L? and map? and L isnt undefined and map isnt undefined
 
 #Loop through all beacons see if they are still within boundaryRectangle
-checkAllBeacons = ->
+checkAllBeacons = !->
 	if beaconCircles? and beaconMarkers? and locationOne? and locationTwo? and mapReady()
 		bounds = L.latLngBounds(locationOne.getLatLng(), locationTwo.getLatLng())
 		for key of beaconCircles
@@ -1337,222 +1152,174 @@ checkAllBeacons = ->
 				delete beaconMarkers[key]
 
 # Render the location of the user on the map (currently broken)
-renderLocation = ->
-	#Server.call 'log', Plugin.userId(), "[renderLocation()]"
-	Obs.observe ->
-		if Geoloc.isSubscribed()
-			#Server.call 'log', Plugin.userId(), "Track location"
-			state = Geoloc.track(100, 0)
-			Obs.observe ->
-				#Server.call 'log', Plugin.userId(), "Found new location"
-				location = state.get('latlong');
-				if location?
-					log 'Rendered location on the map'
-					location = location.split(',')
-					if mapReady()
-						# Show the player's location on the map
-						latLngObj= L.latLng(location[0], location[1])
-						if not (Db.local.peek('mapLocation')?)
-							window.restoreMapLocation = true
-							Db.local.set('mapLocation', 'lat', latLngObj.lat)
-							Db.local.set('mapLocation', 'lng', latLngObj.lng)
-							Db.local.set('mapLocation', 'zoom', 16)
-							restoreMapLocationNow()
-						log 'bounds lat=',not (Db.shared.peek('game', 'bounds', 'one', 'lat')?), ', window.locationOne?=', window.locationOne?
-						if not (Db.shared.peek('game', 'bounds', 'one', 'lat')?)
-							one = L.latLng(latLngObj.lat+0.01,latLngObj.lng-0.02)
-							two = L.latLng(latLngObj.lat-0.01,latLngObj.lng+0.02)
-							Server.sync 'setBounds', one, two, !->
-								log 'predicting bounds change'
-								Db.shared.set 'game', 'bounds', {one: {lat: one.lat, lng: one.lng}, two: {lat: two.lat, lng: two.lng}}
-								log 'predicted bounds: ', {one: {lat: one.lat, lng: one.lng}, two: {lat: two.lat, lng: two.lng}}
-							map.setView(latLngObj)
-						locationIcon = L.icon({
-							iconUrl: Plugin.resourceUri('location.png'),
-							iconSize:     [21, 40], 
-							iconAnchor:   [11, 40], 
-							popupAnchor:  [0, -40]
-						});
-						if not (beaconCurrentLocation?) or beaconCurrentLocation == undefined
-							window.beaconCurrentLocation = L.marker(latLngObj, {icon: locationIcon})
-							markerClick = () -> 
-								beaconCurrentLocation.togglePopup()	
-							beaconCurrentLocation.on('contextmenu', markerClick)
-							beaconCurrentLocation.bindPopup("This is your current location." + "<br>Accuracy: " + accuracy, {closeOnClick: true, closeButton: false})						
-							beaconCurrentLocation.addTo(map)
-						beaconCurrentLocation.setLatLng(latLngObj)
-						accuracy = undefined
-						if state.get('accuracy') < 1000
-							accuracy = Math.round(state.get('accuracy')) + 'm'
+renderLocation = (map) !->
+	# Marker on the map
+	Obs.observe !->
+		return if !Geoloc.isSubscribed()
+		state = Geoloc.track()
+		return if !state
+		Obs.observe !->
+			location = state.get('latlong')
+			accuracy = state.get('accuracy')
+			return if !location
+			map.marker location, !->
+				Dom.style
+					width: '42px'
+					height: '42px'
+					margin: '-21px 0 0 -21px'
+					borderRadius: '50%'
+				# Popup div
+				Obs.observe !->
+					if showPopupO.get() is -1
+						renderPopup
+							content: !->
+								Dom.style
+									whiteSpace: 'normal'
+								Dom.text 'Your location'
+								if (lastUpdate = state.get('time'))?
+									smallText !-> Time.deltaText(lastUpdate)
+				Dom.div !->
+					Obs.observe !->
+						if ((new Date()/1000)-state.get('time')) > 60*60 # Make old locations less visible
+							Dom.style opacity: 0.7
 						else
-							accuracy = Math.round(state.get('accuracy')/1000) + 'km'
-						beaconCurrentLocation.setPopupContent("This is your current location." + "<br>Accuracy: " + accuracy)
-						
-						# GeoLocation information bar (testing purposes)
-						###
+							Dom.style opacity: 1
+						Ui.avatar Plugin.userAvatar(Plugin.userId()), size: 42
+				# Popup trigger
+				Dom.onTap !->
+					if showPopupO.peek() is -1
+						showPopupO.set ''
+					else
+						showPopupO.set -1
+			radius = accuracy
+			if radius > 1000
+				radius = 1000
+			map.circle location, radius,
+				color: '#FFA200'
+				fillColor: '#FFA200'
+				fillOpacity: 0.1
+				weight: 1
+				opacity: 0.3
+				onTap: !->
+					if showPopupO.peek() is -1
+						showPopupO.set ''
+					else
+						showPopupO.set -1
+	# Pointer arrow
+	Obs.observe !->
+		addBar
+			top: true
+			order: -20
+			content: !->
+				return if !Geoloc.isSubscribed()
+				state = Geoloc.track()
+				return if !state
+				Obs.observe !->
+					location = state.get('latlong')
+					lastTime = state.get('time')
+					return if !location
+					# Render an arrow that points to your location if you do not have it on your screen already
+					if !(Map.inBounds(location, map.getLatlongNW(), map.getLatlongSE()))
+						Dom.style
+							display: 'inline-block'
+							padding: '7px'
+							width: '50px'
+							height: '50px'
+						Dom.onTap !->
+							map.setLatlong location
+							map.setZoom 16
 						Dom.div !->
-							Dom.cls 'infobar'
+							styleTransformAngle map.getLatlongNW(), location
+							Dom.style
+								width: '50px'
+								height: '50px'
+								borderRadius: '50%'
+								backgroundColor: '#0077cf'
+							Dom.cls 'pointerArrow'
+						Dom.div !->
+							avatarKey = Plugin.userAvatar()
+							Dom.style
+								width: '50px'
+								height: '50px'
+								Box: 'middle center'
+								marginTop: '-50px'
+								_transform: "translate3d(0,0,0)"
+							Ui.avatar avatarKey, size: 44, style:
+								display: 'block'
+								margin: '0'
+								border: '0 none'
+						Dom.div !->
+							Dom.style
+								overflow: "hidden"
+								width: '50px'
+								height: '50px'
+								marginTop: "-50px"
+								borderRadius: '50%'
+								_transform: "translate3d(0,0,0)"
 							Dom.div !->
 								Dom.style
-									float: 'left'
-									marginRight: '10px'
-									width: '30px'
-									_flexGrow: '0'
-									_flexShrink: '0'
-								Icon.render data: 'info', color: '#fff', style: { paddingRight: '10px'}, size: 30
-							Dom.div !->
-								Dom.style
-									_flexGrow: '1'
-									_flexShrink: '1'
-								Dom.text "lat=" + location[0] + ", lng=" + location[1] + ", accuracy=" + state.get('accuracy') + ", slow=" + state.get('slow') + ", time=" + state.get('timestamp') + " ("
-								Time.deltaText state.get('timestamp')/1000
-								Dom.text ") "
-						###
-						Obs.observe ->
-							indicationArrowRedraw.get()
-							if mapReady()
-								if (Db.shared.peek('gameState') is 1 or (Db.shared.peek('gameState') is 0 and (!Plugin.userIsAdmin() or Plugin.ownerId() is Plugin.userId()))) and map.getBounds()?
-									map.on('moveend', indicationArrowListener)
-									# Render an arrow that points to your location if you do not have it on your screen already
-									if !(map.getBounds().contains(latLngObj))
-										#log 'Your location is outside your viewport, rendering indication arrow'
-										center= map.getBounds().getSouthWest()										
-										difLat = Math.abs(latLngObj.lat - center.lat)
-										difLng = Math.abs(latLngObj.lng - center.lng)
-										angle = 0
-										if latLngObj.lng > center.lng and latLngObj.lat > center.lat
-											angle = Math.atan(difLng/difLat) 
-										else if latLngObj.lng > center.lng and latLngObj.lat <= center.lat
-											angle = Math.atan(difLat/difLng)+ Math.PI/2 
-										else if latLngObj.lng <= center.lng and latLngObj.lat <= center.lat
-											angle = Math.atan(difLng/difLat)+ Math.PI
-										else if latLngObj.lng <= center.lng and latLngObj.lat > center.lat
-											angle = (Math.PI-Math.atan(difLng/difLat)) + Math.PI
-										angleDeg = 	angle*180/Math.PI
-										#log 'angleDeg=', angleDeg
-										t = "rotate(" +angle + "rad)"
-										distanceToPlayfield = latLngObj.distanceTo(center)
-										if distanceToPlayfield <= 1000
-											distanceToPlayfield = Math.round(distanceToPlayfield) + "m"
-										if distanceToPlayfield > 1000
-											distanceToPlayfield = Math.round(distanceToPlayfield/1000) + "km"
+									backgroundColor: "#0077cf"
+									color: "#FFF"
+									fontSize: "50%"
+									width: "50px"
+									height: "20px"
+									paddingTop: "2px"
+									marginTop: "35px"
+									textAlign: 'center'
+								Dom.text getDistanceString map.getLatlongNW(), location
+	# Check for beacon capturing
+	Obs.observe !->
+		if Db.shared.peek('gameState') is 1 # Only when the game is running, do something
+			return if !Geoloc.isSubscribed()
+			state = Geoloc.track()
+			return if !state
+			Obs.observe !->
+				Db.shared.iterate 'game', 'beacons', (beacon) !->
+					distance = Map.distance(state.get('latlong'), beacon.get('location', 'lat')+','+beacon.get('location', 'lng'))
+					log 'distance=', distance, 'beacon=', beacon
+					beaconRadius = Db.shared.peek('game', 'beaconRadius')
+					within = distance - beaconRadius <= 0
+					deviceId = Db.local.peek('deviceId')
+					inRangeValue = beacon.peek('inRange', Plugin.userId(), 'device')
+					accuracy = state.get('accuracy')
+					checkinLocation = !->
+						[lat,lng] = state.peek('latlong').split(',')
+						if +Db.shared.peek('gameState') is 1
+							log 'checkinLocation: user='+Plugin.userName(Plugin.userId())+' ('+Plugin.userId()+'), deviceId='+deviceId+', accuracy='+accuracy+', gameState='+parseInt(Db.shared.peek('gameState'))
+							Server.send 'checkinLocation', Plugin.userId(), {lat: lat, lng: lng}, deviceId, accuracy
+					if within
+						log 'accuracy='+accuracy+', beaconRadius='+beaconRadius
+						if accuracy > beaconRadius # Deny capturing with low accuracy
+							if not inRangeValue?
+								log 'Did not checkin location, accuracy too low: '+accuracy
+								addBar
+									top: false
+									order: 10
+									content: !->
+										Dom.style
+											padding: '11px'
+											fontSize: '16px'
+											Box: 'horizontal center'
+											backgroundColor: '#888888'
+											color: 'white'
 										Dom.div !->
-											Dom.cls 'indicationArrow'
 											Dom.style
-												mozTransform: t
-												msTransform: t
-												oTransform: t
-												webkitTransform: t
-												transform: t
-												backgroundColor: Db.shared.peek('colors', getTeamOfUser(Plugin.userId()), 'hex')
+												marginRight: '10px'
+												width: '30px'
+											Icon.render data: 'warn', color: '#fff', style: {paddingRight: '10px'}, size: 30
 										Dom.div !->
-											Dom.cls 'arrowDivText'
-											Dom.text "You're " + distanceToPlayfield + " away"	
-										Dom.div !->
-											Dom.onTap !->
-												map.setView(latLngObj, 16)
-											Dom.style 
-												position: 'absolute'
-												bottom: '0px'
-												left: '0px'
-												width: '160px'
-												height: '45px'
-												zIndex: '11'
-							Obs.onClean ->
-								# Deregister move/zoom listeners to update indication arrow
-								if mapReady()
-									map.off('moveend', indicationArrowListener)
-						# Checking if users are capable of taking over beacons
-						Obs.observe ->
-							window.inRangeCheckinCount[Plugin.groupCode()] = 0
-							if Db.shared.peek('gameState') is 1 # Only when the game is running, do something
-								log 'Checking beacon takeover'
-								Db.shared.iterate 'game', 'beacons', (beacon) !->
-									beaconCoord = L.latLng(beacon.peek('location', 'lat'), beacon.peek('location', 'lng'))
-									if not beaconCoord?
-										log 'beacon coordinate not found'
-									else
-										distance = latLngObj.distanceTo(beaconCoord)
-										#log 'distance=', distance, 'beacon=', beacon
-										beaconRadius = Db.shared.peek('game', 'beaconRadius')
-										within = distance - beaconRadius <= 0
-										deviceId = Db.local.peek('deviceId')
-										inRangeValue = beacon.peek('inRange', Plugin.userId(), 'device')
-										accuracy = state.get('accuracy')
-										checkinLocation = ->
-											if parseInt(Db.shared.peek('gameState')) is 1 and window.inRangeCheckinCount[Plugin.groupCode()] < Config.afkCheckinLocation
-												window.inRangeCheckinCount[Plugin.groupCode()] = window.inRangeCheckinCount[Plugin.groupCode()]+1
-												log 'checkinLocation: user='+Plugin.userName(Plugin.userId())+' ('+Plugin.userId()+'), deviceId='+deviceId+', accuracy='+accuracy+', count='+window.inRangeCheckinCount[Plugin.groupCode()]+'/'+Config.afkCheckinLocation+', gameState='+parseInt(Db.shared.peek('gameState'))
-												Server.send 'checkinLocation', Plugin.userId(), latLngObj, deviceId, accuracy
-											else
-												stopLocationSending()
-										if within
-											log 'accuracy='+accuracy+', beaconRadius='+beaconRadius
-											if accuracy > beaconRadius # Deny capturing with low accuracy
-												if not inRangeValue?
-													#clearInterval(checinLocation) # TODO check if this is required or causes problems
-													#inRangeCheckinRunning[Plugin.groupCode()] = false
-													log 'Did not checkin location, accuracy too low: '+accuracy
-													Dom.div !->
-														Dom.cls 'infobar'
-														Dom.div !->
-															Dom.style
-																float: 'left'
-																marginRight: '10px' 
-																width: '30px'
-																_flexGrow: '0'
-																_flexShrink: '0'
-															Icon.render data: 'warn', color: '#fff', style: {paddingRight: '10px'}, size: 30
-														Dom.div !->
-															Dom.style
-																_flexGrow: '1'
-																_flexShrink: '1'
-															Dom.text 'Your accuracy of '+accuracy+' meter is higher than the maximum allowed '+beaconRadius+' meter.'
-											else
-												if inRangeValue?
-													if not (inRangeCheckinRunning[Plugin.groupCode()]?) or not (inRangeCheckinRunning[Plugin.groupCode()])
-														window.inRangeCheckinCount[Plugin.groupCode()] = 0
-														checkinLocation()														
-														window.checkinLocationFunctionId = setInterval(checkinLocation, Config.inRangeCheckinTime*1000)
-														#log 'checkinLocation='+checkinLocation+', checkinLocationFunctionId='+window.checkinLocationFunctionId
-														window.inRangeCheckinRunning[Plugin.groupCode()] = true
-												else
-													log 'Trying beacon takeover: userId='+Plugin.userId()+', location='+latLngObj+', deviceId='+deviceId
-													window.inRangeCheckinCount[Plugin.groupCode()] = 0
-													checkinLocation()
-													if not (inRangeCheckinRunning[Plugin.groupCode()]?) or not (inRangeCheckinRunning[Plugin.groupCode()])
-														window.checkinLocationFunctionId = setInterval(checkinLocation, Config.inRangeCheckinTime*1000)
-														#log 'checkinLocation='+checkinLocation+', checkinLocationFunctionId='+window.checkinLocationFunctionId
-														window.inRangeCheckinRunning[Plugin.groupCode()] = true
-										else if (not within and inRangeValue? and (inRangeValue == deviceId || inRangeValue == 'true'))
-											log 'Trying stop of beacon takeover: userId='+Plugin.userId()+', location='+latLngObj+', deviceId='+deviceId
-											checkinLocation()
-											stopLocationSending()
-				else
-					log 'Location could not be found'
-		Obs.onClean ->
-			#Server.call 'log', Plugin.userId(), "Untrack location"
+											Dom.style
+												Flex: true
+											Dom.text 'Your accuracy of '+accuracy+' meter is higher than the maximum allowed '+beaconRadius+' meter.'
+						else
+							checkinLocation()
+							log 'Trying beacon takeover: userId='+Plugin.userId()+', location='+latLngObj+', deviceId='+deviceId
+					else if (not within and inRangeValue? and (inRangeValue is deviceId || inRangeValue is 'true'))
+						log 'Trying stop of beacon takeover: userId='+Plugin.userId()+', location='+latLngObj+', deviceId='+deviceId
+						checkinLocation()
 
-#Function to stop the battery drain. Is called when 15 minutes have passed after you have closed the plugin.
-stopLocationSending = ->
-	log 'Trying to stop location checkin: running='+inRangeCheckinRunning[Plugin.groupCode()]+', count='+inRangeCheckinCount[Plugin.groupCode()]+', checkinLocationFunctionId='+window.checkinLocationFunctionId
-	if inRangeCheckinRunning[Plugin.groupCode()]?
-		window.inRangeCheckinRunning[Plugin.groupCode()] = false
-	if window.checkinLocationFunctionId?
-		clearInterval(checkinLocationFunctionId)
-		window.checkinLocationFunctionId = undefined
 
-# ========== Functions ==========
-# Get the team id the user is added to
-getTeamOfUser = (userId) ->
-	result = -1
-	Db.shared.iterate 'game', 'teams', (team) !->
-		if team.peek('users', userId, 'userName')?
-			result = team.key()
-	#if result is -1
-	#	log 'Warning: Did not find team for userId=', userId
-	return result
-
+# =============== Functions ===============
 # Input hexadecimal value and opacity, returns the RGBA equivalent
 hexToRGBA = (hex, opacity) ->
 	result = 'rgba('
@@ -1575,20 +1342,133 @@ getInRange = (beacon) ->
 			players = Plugin.userName(user.key())
 	return players;
 
-# Copy found in server.coffee!
-userStringToFriendly = (users) ->
-	if (not (users?)) or users == ''
-		return undefined
-	split = users.split(', ')
-	if split.length == 0
-		return ""
-	result = Plugin.userName(parseInt(split[0]))
-	i=1
-	while i<(split.length-1)
-		result += ', ' + Plugin.userName(parseInt(split[i]))
-		i++
-	if split.length > 1
-		result += ' and ' + Plugin.userName(parseInt(split[split.length-1]))
-	return result
+# Render a map marker popup
+renderPopup = (opts) !->
+	opts.anchor = 'middle' if !opts.anchor
+	opts.width = 100 if !opts.width
 
+	iconWidth = Dom.get().width()
+	iconHeight = Dom.get().height()
+	Dom.div !->
+		opts.content?()
+		Dom.style
+			width: opts.width
+			padding: "8px"
+			border: "1px solid #ccc"
+		Dom.div !->
+			t = "rotate(45deg)"
+			if (width = Dom.get().width()) is 0 then width = opts.width
+			Dom.style
+				width: "10px"
+				height: "10px"
+				margin: "0 0 -12px "+((width+10)/2-9)+"px"
+				backgroundColor: "#FFF"
+				_boxShadow: "1px 1px 0 #BBB"
+				mozTransform: t
+				msTransform: t
+				oTransform: t
+				webkitTransform: t
+				transform: t
+				borderRadius: "100% 0 0 0"
+		Dom.style
+			backgroundColor: "#FFF"
+			borderRadius: "5px"
+			textAlign: "center"
+			overflow: "visible"
+			textOverflow: 'ellipsis'
+			whiteSpace: 'nowrap'
+			lineHeight: "125%"
+			zIndex: "10000000"
+			color: "#222"
+		height = Dom.get().height()
+		width = Dom.get().width()
+		width = opts.width if width is 0
+		Dom.style
+			margin: (-height-7-(if opts.anchor is 'middle' then iconHeight/2 else iconHeight))+"px 0 7px -"+(width/2-(iconWidth/2))+'px'
 
+# Render small text
+smallText = (content) !->
+	Dom.div !->
+		Dom.style
+			fontSize: '90%'
+			color: '#999'
+		if typeof content is 'function'
+			content()
+		else
+			Dom.text content
+
+# Organize the bottom and top bars
+bars = []
+barsTrigger = Obs.create {}
+barNumber = 0
+addBar = (opts) !->
+	barNumber++
+	thisNumber = barNumber
+	bars[thisNumber] = opts.content
+	barsTrigger.set thisNumber,
+		order: opts.order||1
+		top: !!opts.top
+	Obs.onClean !->
+		barsTrigger.remove thisNumber
+		delete bars[thisNumber]
+# Render the bars
+renderBars = !->
+	Dom.div !->
+		Dom.style
+			position: "absolute"
+			top: "0"
+			left: "0"
+			right: "0"
+			zIndex: "999999"
+		barsTrigger.iterate (bar) !->
+			Dom.div !->
+				bars[bar.key()]()
+		, (bar) ->
+			if bar.get('top')
+				-bar.get('order')
+	Dom.div !->
+		Dom.style
+			position: "absolute"
+			bottom: "0"
+			left: "0"
+			right: "0"
+			zIndex: "999999"
+		barsTrigger.iterate (bar) !->
+			Dom.div !->
+				bars[bar.key()]()
+		, (bar) ->
+			if !bar.get('top')
+				-bar.get('order')
+
+# Style an element with a rotation to a certain direction
+styleTransformAngle = (anchor, to) !->
+	[anchorLat,anchorLong] = anchor.split(",")
+	[lat,long] = to.split(",")
+	pi = 3.14159265
+	difLat = Math.abs(lat - anchorLat)
+	difLng = Math.abs(long - anchorLong)
+	angle = 0
+	if long > anchorLong and lat > anchorLat
+		angle = Math.atan(difLng/difLat)
+	else if long > anchorLong and lat <= anchorLat
+		angle = Math.atan(difLat/difLng)+ pi/2
+	else if long <= anchorLong and lat <= anchorLat
+		angle = Math.atan(difLng/difLat)+ pi
+	else if long <= anchorLong and lat > anchorLat
+		angle = (pi-Math.atan(difLng/difLat)) + pi
+	t = "rotate(" +angle + "rad)"
+	Dom.style
+		mozTransform: t
+		msTransform: t
+		oTransform: t
+		webkitTransform: t
+		_transform: t
+
+# Get a compact distance string
+getDistanceString = (from, to) !->
+	distance = Map.distance(from, to)
+	if distance <= 1000
+		distanceString = Math.round(distance) + "m"
+	else
+		distanceString = Math.round(distance/1000) + "km"
+	return distanceString
