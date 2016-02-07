@@ -27,10 +27,13 @@ Ranking = require 'ranking'
 - Events and log page to other files
 - Setup
 - Translate things
+- conversion:
+    - lat+lng -> latlong (beacons)
 ###
 
 showPopupO = Obs.create() # Beacon key or -1 for user popup
-thing = @
+tapFunction = undefined
+longTapFunction = undefined
 
 # =============== Events ===============
 # Main function, called when plugin is started
@@ -782,6 +785,7 @@ homePage = !->
 			renderSetupGuidance()
 			renderSetupOptions()
 			renderBeacons map
+			renderAddBeacons map
 			# TODO: render setup stuff
 
 			Page.setTitle 'Setting up the game'
@@ -840,6 +844,10 @@ renderMap = ->
 		clusterRadius: 45
 		clusterSpreadMultiplier: 2
 		latlong: Db.local.peek('lastMapLocation') ? "52.444553, 5.740644"
+		onTap: (latlong) !->
+			tapFunction?(latlong)
+		onLongTap: (latlong) !->
+			longTapFunction?(latlong)
 	, (map) !->
 		Obs.observe !->
 			# Switch to certain coordinates
@@ -860,7 +868,7 @@ renderBeacons = (map) !->
 	Db.shared.iterate 'game', 'beacons', (beacon) !->
 		teamNumber = beacon.get('owner') ? -1
 		teamColor =  Shared.teams[teamNumber].hex
-		location = beacon.get("location", "lat")+","+beacon.get("location", "lng")
+		location = beacon.get 'location'
 		map.marker location, !->
 			Dom.style
 				width: "22px"
@@ -915,6 +923,25 @@ renderBeacons = (map) !->
 					showPopupO.set ''
 				else
 					showPopupO.set beacon.key()
+
+# Add marker adding
+renderAddBeacons = (map) !->
+	tapFunction = longTapFunction = (latlong) !->
+		log 'click: '+latlong
+		beaconRadius = Db.shared.get('game', 'beaconRadius')
+		# Check if marker is not close to other marker
+		result = undefined
+		Db.shared.iterate 'game', 'beacons', (beacon) !->
+			if Map.distance(beacon.get('location'), latlong) < beaconRadius*2
+				result = 'Beacon is too close to another beacon'
+		if result?
+			Modal.show(result)
+		else
+			Server.sync 'addMarker', Plugin.userId(), latlong, !->
+				number = Math.floor((Math.random() * 10000) + 200)
+				Db.shared.set 'game', 'beacons', number, {location: latlong, owner: -1}
+	Obs.onClean !->
+		tapFunction = longTapFunction = undefined
 
 # Listener that checks for clicking the map
 addMarkerListener = (event) !->
@@ -1095,7 +1122,7 @@ renderLocation = (map) !->
 			return if !state
 			Obs.observe !->
 				Db.shared.iterate 'game', 'beacons', (beacon) !->
-					distance = Map.distance(state.get('latlong'), beacon.get('location', 'lat')+','+beacon.get('location', 'lng'))
+					distance = Map.distance(state.get('latlong'), beacon.get('location'))
 					log 'distance=', distance, 'beacon=', beacon
 					beaconRadius = Db.shared.peek('game', 'beaconRadius')
 					within = distance - beaconRadius <= 0
@@ -1133,9 +1160,9 @@ renderLocation = (map) !->
 											Dom.text 'Your accuracy of '+accuracy+' meter is higher than the maximum allowed '+beaconRadius+' meter.'
 						else
 							checkinLocation()
-							log 'Trying beacon takeover: userId='+Plugin.userId()+', location='+latLngObj+', deviceId='+deviceId
+							log 'Trying beacon takeover: userId='+Plugin.userId()+', location='+beacon.peek('location')+', deviceId='+deviceId
 					else if (not within and inRangeValue? and (inRangeValue is deviceId || inRangeValue is 'true'))
-						log 'Trying stop of beacon takeover: userId='+Plugin.userId()+', location='+latLngObj+', deviceId='+deviceId
+						log 'Trying stop of beacon takeover: userId='+Plugin.userId()+', location='+beacon.get('location')+', deviceId='+deviceId
 						checkinLocation()
 
 

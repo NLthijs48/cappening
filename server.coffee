@@ -121,7 +121,7 @@ exports.client_addMarker = (client, location) ->
 	if Db.shared.peek('gameState') isnt 0
 		log '[addMarker()] '+Plugin.userName(client), ' (id=', client, ') tried to add a marker while game is not in setup phase!'
 	else
-		log '[addMarker()] Adding marker: lat=', location.lat, ', lng=', location.lng
+		log '[addMarker()] Adding marker: '+location
 		nextNumber = 0
 		while Db.shared.peek('game', 'beacons', nextNumber)?
 			nextNumber++
@@ -142,8 +142,8 @@ exports.client_deleteBeacon = (client, location) ->
 		log '[deleteBeacon()] '+Plugin.userName(client), ' (id=', client, ') tried to delete a beacon while game is not in setup phase!'
 	else
 		Db.shared.iterate 'game', 'beacons', (beacon) !->
-			if beacon.peek('location', 'lat') == location.lat and beacon.peek('location', 'lng') == location.lng
-				log '[deleteBeacon()] Deleted beacon: key='+beacon.key()+', lat=', location.lat, ', lng=', location.lng
+			if beacon.get('location') is location
+				log '[deleteBeacon()] Deleted beacon: key='+beacon.key()+', location='+location
 				Db.shared.remove 'game', 'beacons', beacon.key()
 
 # Set the round time unit and number
