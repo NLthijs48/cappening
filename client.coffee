@@ -7,7 +7,6 @@ Plugin = require 'plugin'
 Page = require 'page'
 Server = require 'server'
 Ui = require 'ui'
-CSS = require 'css'
 Geoloc = require 'geoloc'
 Form = require 'form'
 Icon = require 'icon'
@@ -16,7 +15,10 @@ Event = require 'event'
 Map = require 'map'
 Markdown = require 'markdown'
 
+CSS = require 'css'
 Shared = require 'shared'
+Events = require 'events'
+Ranking = require 'ranking'
 
 ### TODO
 - Switch to new latlong format
@@ -28,6 +30,7 @@ Shared = require 'shared'
 ###
 
 showPopupO = Obs.create() # Beacon key or -1 for user popup
+thing = @
 
 # =============== Events ===============
 # Main function, called when plugin is started
@@ -35,6 +38,7 @@ exports.render = !->
 	log 'FULL RENDER'
 	Obs.onClean !->
 		log 'FULL CLEAN'
+	# Compatibility check
 	if (version = Plugin.agent().android)? and version < 3.0
 		Dom.text 'Sorry this game is unavailable for android version 2.3 or lower'
 		log "Unsupported Android version: "+version
@@ -53,11 +57,14 @@ exports.render = !->
 
 	# Display correct page
 	Obs.observe !->
+		if Db.shared.get('gameState') is 0
+			homePage()
+			return
 		page = Page.state.get(0)
 		if page is "scores"
-			rankingPage()
+			Ranking.render()
 		else if page is "log"
-			eventsPage()
+			Events.render()
 		else
 			homePage()
 
@@ -125,22 +132,40 @@ renderNavigationBar = !->
 		order: 10
 		content: !->
 			Dom.style
+				Box: 'horizontal'
 				height: "50px"
 				boxShadow: "0 3px 10px 0 rgba(0, 0, 0, 0.3)"
 				backgroundColor: hexToRGBA(Shared.teams[Shared.getTeamOfUser(Plugin.userId())].hex, 0.9)
 				_textShadow: '0 0 5px #000000, 0 0 5px #000000'
+			Dom.css
+				'.bar-button:last-of-type':
+					borderRight: '0 none !important'
+				'.bar-button:hover':
+					backgroundColor:'rgba(0, 0, 0, 0.1) !important'
+				'.bar-button:active':
+					backgroundColor: 'rgba(0,0,0,0.2) !important'
+			renderButton = (content) !->
+				Dom.div !->
+					Dom.style
+						height: '100%'
+						color: 'white'
+						borderRight: '2px solid rgba(255,255,255,0.3)'
+						backgroundColor: 'transparent'
+						Flex: true
+						Box: 'middle center'
+					Dom.cls 'bar-button'
+					content?()
 	        # Button to event log
-			Dom.div !->
+			renderButton !->
 				Icon.render data: 'clipboard', color: '#fff', size: 30, style: {verticalAlign: 'middle'}
 				Dom.div !->
 					Dom.text 'Events'
 					Dom.style verticalAlign: 'middle', display: 'inline-block', marginLeft: '5px', fontSize: '13px'
 				Event.renderBubble ['log']
-				Dom.cls 'bar-button'
 				Dom.onTap !->
 					Page.nav 'log'
 			# Button to scores page
-			Dom.div !->
+			renderButton !->
 				Dom.div !->
 					Dom.style
 						width: '29px'
@@ -154,7 +179,6 @@ renderNavigationBar = !->
 				Dom.div !->
 					Dom.text 'Ranking'
 					Dom.style verticalAlign: 'middle', display: 'inline-block', marginLeft: '5px', fontSize: '13px'
-				Dom.cls 'bar-button'
 				Dom.onTap !->
 					Page.nav 'scores'
 
@@ -371,6 +395,135 @@ renderEndGameBar = !->
 							Server.call 'restartGame'
 
 
+renderSetupGuidance = !->
+	addBar
+		top: true
+		order: 10
+		content: !->
+			Dom.div !->
+				Dom.style
+					backgroundColor: '#FFF'
+					padding: '8px'
+					fontSize: '18px'
+					textAlign: 'center'
+					borderBottom: '1px solid #ccc'
+				if !Shared.isAdmin()
+					Dom.text 'The admin is setting up a new game!'
+					return
+				Dom.text 'Setup a game...'
+
+
+renderSetupOptions = !->
+	addBar
+		top: false
+		order: -10
+		content: !->
+			Dom.style paddingRight: '10px'
+			renderButton = (content) !->
+				Dom.div !->
+					Dom.style
+						display: 'inline-block'
+						backgroundColor: if Shared.isAdmin()  then '#ba1a6e' else '#666'
+						padding: '8px 12px'
+						margin: '0 0 10px 10px'
+						fontSize: '17px'
+						color: '#FFF'
+						borderRadius: '3px'
+					content?()
+			# Number of teams
+			renderButton !->
+				Dom.text (Db.shared.get('game', 'numberOfTeams') ? 2) + ' teams'
+				Dom.onTap !->
+					if !Shared.isAdmin()
+						Modal.show 'Number of teams', 'The admin can change this setting'
+						return
+					if Plugin.users.count().peek() <= 2
+						Modal.show "You cannot use more teams since you don't have enough people in your group"
+						return
+					Modal.show
+						title: 'Select number of teams'
+						buttons: false
+						content: !->
+							maxTeams = Math.max(2, Math.min(6, Plugin.users.count().get()))
+							renderOption = (count) !->
+								Ui.option
+									content: count + ' teams'
+									onTap: !->
+										Server.sync 'setTeams', count, !->
+											Db.shared.set 'game', 'numberOfTeams', count
+							for count in [2..maxTeams]
+								renderOption count
+			# Length
+			renderButton !->
+				Dom.text (Db.shared.get('game', 'roundTimeNumber') ? 7) + ' ' + (Db.shared.get('game', 'roundTimeUnit') ? 'days').toLowerCase()
+				Dom.onTap !->
+					if !Shared.isAdmin()
+						Modal.show 'Duration of the game', 'The admin can change this setting'
+						return
+					roundTimeNumber = Obs.create Db.shared.peek('game', 'roundTimeNumber')
+					roundTimeUnit = Obs.create Db.shared.peek('game', 'roundTimeUnit')
+					Modal.show
+						title: 'Select round duration'
+						content: !->
+							# Duration input
+							Dom.div !->
+								Dom.style maxWidth: '250px', paddingBottom: '10px'
+								Dom.text 'After this time the game will determine the winning team'
+							Dom.div !->
+								Dom.style
+									height: '81px'
+									Box: 'middle center'
+								sanitize = (value) ->
+									if value < 1
+										return 1
+									else if value > 999
+										return 999
+									else
+										return value
+								renderArrow = (direction) !->
+									Dom.div !->
+										Dom.style
+											width: 0
+											height: 0
+											margin: '0 auto'
+											borderStyle: "solid"
+											borderWidth: "#{if direction>0 then 0 else 20}px 20px #{if direction>0 then 20 else 0}px 20px"
+											borderColor: "#{if roundTimeNumber.get()<=1 then 'transparent' else '#ba1a6e'} transparent #{if roundTimeNumber.get()>=999 then 'transparent' else '#ba1a6e'} transparent"
+										if (direction>0 and roundTimeNumber.get()<999) or (direction<0 and roundTimeNumber.get()>1)
+											Dom.onTap !->
+												roundTimeNumber.set sanitize(roundTimeNumber.peek()+direction)
+								# Number input
+								Dom.div !->
+									Dom.style margin: '0 10px 0 0', width: '51px', float: 'left'
+									renderArrow 1
+									Dom.input !->
+										inputElement = Dom.get()
+										Dom.prop
+											size: 2
+											value: roundTimeNumber.get()
+										Dom.style
+											fontFamily: 'monospace'
+											fontSize: '30px'
+											fontWeight: 'bold'
+											textAlign: 'center'
+											border: 'inherit'
+											backgroundColor: 'inherit'
+											color: 'inherit'
+										Dom.on 'input change', !-> roundTimeNumber.set sanitize(inputElement.value())
+										Dom.on 'click', !-> inputElement.select()
+									renderArrow -1
+								# Unit inputs
+								Form.segmented
+									name: 'timeUnit'
+									value: roundTimeUnit.peek() ? 'Days'
+									segments: ['Hours', 'Hours', 'Days', 'Days', 'Months', 'Months']
+									onChange: (value) !-> roundTimeUnit.set(value)
+						cb: !->
+							Server.sync 'setRoundTime', roundTimeNumber.peek(), roundTimeUnit.peek(), !->
+								Db.shared.set 'game', 'roundTimeNumber', roundTimeNumber.peek()
+								Db.shared.set 'game', 'roundTimeUnit', roundTimeUnit.peek()
+
+
 # =============== Page Contents ===============
 # Setup pages
 setupContent = !->
@@ -413,84 +566,6 @@ setupContent = !->
 				if Plugin.users.count().get() <= 1
 					Dom.h2 "Warning"
 					Dom.text "Be sure to invite some friends if you actually want to play the game. One cannot play alone! (You can test it out though)."
-				# Teams input
-				Dom.h2 tr("Select the number of teams")
-				Dom.div !->
-					Dom.cls "team-text"
-				Dom.div !->
-					log 'numberOfTeams.get(): ', numberOfTeams.get()
-					Dom.style margin: '0 0 20px 0', height: '50px'
-					renderTeamButton = (number) !->
-						Dom.div !->
-							Dom.text number
-							Dom.cls "team-button"
-							if numberOfTeams.peek() is number
-								Dom.cls "team-button-current"
-							else
-								Dom.onTap !->
-									numberOfTeams.set number
-					userCount = Math.min(Plugin.users.count().get(),6)
-					for number in [2..Math.max(userCount,2)]
-						renderTeamButton number
-				# Duration input
-				Dom.h2 tr("Round time")
-				Dom.text tr "Select the round time, recommended: 7 days."
-				Dom.div !->
-					Dom.style margin: '10px 0 10px 0', height: '81px'
-					sanitize = (value) ->
-						if value < 1
-							return 1
-						else if value > 999
-							return 999
-						else
-							return value
-					renderArrow = (direction) !->
-						Dom.div !->
-							Dom.style
-								width: 0
-								height: 0
-								margin: '0 auto'
-								borderStyle: "solid"
-								borderWidth: "#{if direction>0 then 0 else 20}px 20px #{if direction>0 then 20 else 0}px 20px"
-								borderColor: "#{if roundTimeNumber.get()<=1 then 'transparent' else '#0077cf'} transparent #{if roundTimeNumber.get()>=999 then 'transparent' else '#0077cf'} transparent"
-							if (direction>0 and roundTimeNumber.get()<999) or (direction<0 and roundTimeNumber.get()>1)
-								Dom.onTap !->
-									roundTimeNumber.set sanitize(roundTimeNumber.peek()+direction)
-					# Number input
-					Dom.div !->
-						Dom.style margin: '0 10px 0 0', width: '51px', float: 'left'
-						renderArrow 1
-						Dom.input !->
-							inputElement = Dom.get()
-							Dom.prop
-								size: 2
-								value: roundTimeNumber.get()
-							Dom.style
-								fontFamily: 'monospace'
-								fontSize: '30px'
-								fontWeight: 'bold'
-								textAlign: 'center'
-								border: 'inherit'
-								backgroundColor: 'inherit'
-								color: 'inherit'
-							Dom.on 'input change', !-> roundTimeNumber.set sanitize(inputElement.value())
-							Dom.on 'click', !-> inputElement.select()
-						renderArrow -1
-					# Unit inputs
-					Dom.div !->
-						Dom.style float: 'left', paddingTop: '13px'
-						renderTimeButton = (unit) !->
-							Dom.div !->
-								Dom.text unit
-								Dom.cls "time-button"
-								if roundTimeUnit.get() is unit
-									Dom.cls "time-button-current"
-								else
-									Dom.onTap !->
-										roundTimeUnit.set unit
-						renderTimeButton 'Hours'
-						renderTimeButton 'Days'
-						renderTimeButton 'Months'
 				# Gameinfo setup page:
 				Dom.div !->
 					Dom.h2 "Game information"
@@ -519,11 +594,11 @@ setupContent = !->
 						Db.local.set('currentSetupPage', 'setup2')
 			renderMap()
 			Obs.observe !->
-				if mapReady()
+				if true
 					# Setup map corners
 					# Update the play area square thing
 					markerDragged = !->
-						if mapReady()
+						if true
 							Server.sync 'setBounds', window.locationOne.getLatLng(), window.locationTwo.getLatLng(), !->
 								log 'predicting bounds change'
 								Db.shared.set 'game', 'bounds', {one: {lat: window.locationOne.getLatLng().lat, lng: window.locationOne.getLatLng().lng}, two: {lat: window.locationTwo.getLatLng().lat, lng: window.locationTwo.getLatLng().lng}}
@@ -557,7 +632,7 @@ setupContent = !->
 					boundaryRectangle.addTo(map)
 				Obs.onClean !->
 					log 'onClean() rectangle + corners'
-					if mapReady()
+					if true
 						map.removeLayer locationOne if locationOne?
 						map.removeLayer locationTwo if locationTwo?
 						map.removeLayer boundaryRectangle if boundaryRectangle?
@@ -618,7 +693,7 @@ setupContent = !->
 						Dom.cls 'stepbar-disable'
 			renderMap()
 			Obs.observe !->
-				if mapReady()
+				if true
 					loc1 = L.latLng(Db.shared.get('game', 'bounds', 'one', 'lat'), Db.shared.get('game', 'bounds', 'one', 'lng'))
 					loc2 = L.latLng(Db.shared.get('game', 'bounds', 'two', 'lat'), Db.shared.get('game', 'bounds', 'two', 'lng'))
 					if loc1? and loc2
@@ -628,7 +703,7 @@ setupContent = !->
 						map.on('contextmenu', addMarkerListener)
 				Obs.onClean !->
 					log 'onClean() rectangle'
-					if mapReady()
+					if true
 						map.removeLayer boundaryRectangle if boundaryRectangle?
 						map.off('contextmenu', addMarkerListener)
 			# Info bar
@@ -697,13 +772,19 @@ setupContent = !->
 
 # Home page with map
 homePage = !->
-	log "homePage()"
+	log 'homePage()'
+	Dom.style
+		ChildMargin: 0
 	renderLocationSharing()
 	map = renderMap()
 	Obs.observe !->
-		gameState = Db.shared.get("gameState")
-		if gameState is 0
+		if (gameState = Db.shared.get("gameState")) is 0
+			renderSetupGuidance()
+			renderSetupOptions()
+			renderBeacons map
 			# TODO: render setup stuff
+
+			Page.setTitle 'Setting up the game'
 		else if gameState is 1
 			renderNavigationBar()
 			addProgressBar()
@@ -736,277 +817,14 @@ performTutorial = !->
 	#Tutorial for playing this game the first time
 	tutorial = Db.personal.peek('tutorialState', 'mainContent')
 	if !tutorial?
-		Server.sync 'updateTutorialState', Plugin.userId(), 'mainContent', !->
-			Db.personal.set 'tutorialState', content, 1
 		Modal.show tr("Are you ready to capture your first beacon?"), !->
 			Dom.div tr("Walk towards the indicated area's on the map to capture a beacon.")
 			Dom.div tr("You will be awarded points for capturing a beacon, and for holding it.")
 			Dom.div tr("Tip: Capture all beacons with your team and win in one hour!")
-		, undefined
+		, !->
+			Server.sync 'updateTutorialState', Plugin.userId(), 'mainContent', !->
+				Db.personal.set 'tutorialState', 'mainContent', 1
 		, ['ok', tr("Got it")]
-
-# Ranking page
-rankingPage = !->
-	Page.setTitle !->
-		Dom.text 'Conquest ranking'
-	Ui.list !->
-		Dom.style
-			padding: '0'
-		Db.shared.iterate 'game', 'teams', (team) !->
-			teamColor = Shared.teams[team.key()].hex
-			teamName = Shared.teams[team.key()].name
-			teamScore = Db.shared.get('game', 'teams', team.key(), 'teamScore')
-			# list of teams and their scores
-			expanded = Obs.create(false)
-			Ui.item !->
-				Dom.style
-					padding: '14px'
-					minHeight: '71px'
-					alignItems: 'stretch'
-				Dom.div !->
-					Dom.style
-						width: '70px'
-						height: '70px'
-						background: teamColor
-						backgroundSize: 'cover'
-						position: 'absolute'
-						_textShadow: '0 0 3px rgba(0,0,0,0.8)'
-					Dom.div !->
-						rank = team.get('ranking')
-						Dom.style
-							fontSize: "40px"
-							paddingTop: "12px"
-							textAlign: "center"
-							color: "white"
-							paddingRight: if rank is 1 then '10px' else '15px'
-						Dom.text rank
-						rankingSuffix = {1: "st", 2: "nd", 3: "rd", 4: "th", 5: "th", 6: "th"}
-						Dom.div !->
-							Dom.text rankingSuffix[rank]
-							Dom.style
-							    position: 'absolute'
-							    fontSize: '17px'
-							    left: if rank is 1 then '38px' else '40px'
-							    top: '15px'
-				Dom.div !->
-					Dom.style fontSize: '100%', paddingLeft: '84px'
-					Dom.text "Team " + teamName + " scored " + teamScore + " points"
-					if parseInt(team.key()) is parseInt(Shared.getTeamOfUser(Plugin.userId()))
-						Dom.style fontWeight: 'bold'
-					#log 'users: ', Plugin.users, ', length: ', Plugin.users.count().peek()
-					# To Do expand voor scores
-					if expanded.get() || Plugin.users.count().peek() <= 10
-						team.iterate 'users', (user) !->
-							Dom.div !->
-								if parseInt(user.key())  isnt Plugin.userId()
-									Dom.style fontWeight: 'normal'
-								Dom.style clear: 'both'
-								Ui.avatar Plugin.userAvatar(user.key()),
-									style: margin: '6px 10px 0 0', float: 'left'
-									size: 40
-									onTap: (!-> Plugin.userInfo(user.key()))
-								Dom.div !->
-									Dom.br()
-									Dom.style fontSize: '75%', marginTop: '6px', marginRight: '6px', display: 'block', float: 'left', minWidth: '75px'
-									Dom.text Plugin.userName(user.key()) + " has: "
-								Dom.div !->
-									Dom.style fontSize: '75%', marginTop: '6px', display: 'block', float: 'left'
-									Dom.text user.get('userScore') + " points"
-									Dom.br()
-									Dom.text user.get('captured') + " captured"
-									Dom.br()
-									Dom.text user.get('neutralized') + " neutralized"
-						, (user) -> (-user.get('userScore'))
-					else
-						Dom.div !->
-							Dom.style fontSize: '75%', marginTop: '6px'
-							Dom.text "Tap for details"
-				if Plugin.users.count().peek() > 10
-					Dom.onTap !->
-						expanded.set(!expanded.get())
-		, (team) -> [team.get('ranking')]
-
-# Eventlog page
-eventsPage = !->
-	Page.setTitle !->
-		Dom.text 'Conquest game events'
-	Event.showStar tr('Game events')
-	Ui.list !->
-		Dom.style
-			padding: '0'
-		Db.shared.iterate 'game', 'eventlist', (capture) !->
-			if capture.key() != "maxId"
-				Ui.item !->
-					Dom.style
-						padding: '14px'
-					if capture.peek('type') is "capture" and mapReady()
-						beaconId = capture.peek('beacon')
-						teamId = capture.peek('conqueror')
-						teamColor = Shared.teams[teamId].hex
-						teamName = Shared.teams[teamId].name
-						Dom.onTap !->
-							viewSet = !->
-								map.setView(L.latLng(Db.shared.peek('game', 'beacons' ,beaconId, 'location', 'lat'), Db.shared.peek('game', 'beacons' ,beaconId, 'location', 'lng')), 16)
-							setTimeout(viewSet, 50)
-							Toast.show !->
-								Dom.text 'Captured '
-								Time.deltaText(capture.peek('timestamp'))
-								if capture.peek('members')?
-									Dom.text " by " + Shared.userStringToFriendly(capture.peek('members')) + ' of team ' + teamName
-								else
-									Dom.text ' by team '+teamName
-							Page.back()
-						Dom.div !->
-							Dom.style
-								width: '70px'
-								height: '70px'
-								marginRight: '10px'
-								background: teamColor+" url(#{Plugin.resourceUri('marker-plain.png')}) no-repeat 10px 10px"
-								backgroundSize: '50px 50px'
-						Dom.div !->
-							Dom.style Flex: 1, fontSize: '100%'
-							if Event.isNew(capture.peek('timestamp'))
-								Dom.style color: '#5b0'
-							if capture.peek('members')?
-								Dom.text Shared.userStringToFriendly(capture.peek('members')) + ' of team ' + teamName + ' captured a beacon'
-							else
-								Dom.text "Team " + teamName + " captured a beacon"
-							Dom.div !->
-								Dom.style fontSize: '75%', marginTop: '6px'
-								Dom.text "Captured "
-								Time.deltaText capture.peek('timestamp')
-					else if capture.peek('type') is "captureAll"
-						beaconId = capture.peek('beacon')
-						teamId = capture.peek('conqueror')
-						teamColor = Shared.teams[teamId].hex
-						teamName = Shared.teams[teamId].name
-						log "print capture: teamId; " + teamId
-						Dom.onTap !->
-							viewSet = !->
-								map.setView(L.latLng(Db.shared.peek('game', 'beacons', beaconId, 'location', 'lat'), Db.shared.peek('game', 'beacons', beaconId, 'location', 'lng')), 16)
-							setTimeout(viewSet, 50)
-							Toast.show !->
-								Dom.text 'Captured '
-								Time.deltaText(capture.peek('timestamp'))
-								if capture.peek('members')?
-									Dom.text " by " + Shared.userStringToFriendly(capture.peek('members')) + ' of team ' + teamName
-								else
-									Dom.text ' by team '+teamName
-							Page.back()
-						Dom.div !->
-							Dom.style
-								width: '70px'
-								height: '70px'
-								marginRight: '10px'
-								background: teamColor+" url(#{Plugin.resourceUri('markers-plain.png')}) no-repeat 10px 10px" 
-								backgroundSize: '50px 50px'
-						Dom.div !->
-							Dom.style Flex: 1, fontSize: '100%'
-							if Event.isNew(capture.peek('timestamp'))
-								Dom.style color: '#5b0'
-							Dom.text "Team " + teamName + " team captured all beacons"
-							if capture.peek('members')?
-								Dom.text " thanks to " + Shared.userStringToFriendly(capture.peek('members'))
-							Dom.div !->
-								Dom.style fontSize: '75%', marginTop: '6px'
-								Dom.text "Captured "
-								Time.deltaText capture.peek('timestamp')
-					else if capture.peek('type') is "score"
-						teamId = capture.peek('leading')
-						teamColor = Shared.teams[teamId].hex
-						teamName = Shared.teams[teamId].name
-						Dom.onTap !->
-							Page.nav 'scores'
-						Dom.div !->
-							Dom.style
-								width: '70px'
-								height: '70px'
-								marginRight: '10px'
-								background: teamColor+" url(#{Plugin.resourceUri('rank-switch.png')}) no-repeat 10px 10px" 
-								backgroundSize: '50px 50px'
-						Dom.div !->
-							Dom.style Flex: 1, fontSize: '100%'
-							if Event.isNew(capture.peek('timestamp'))
-								Dom.style color: '#5b0'
-							Dom.text "Team " + teamName + " took the lead"
-							Dom.div !->
-								Dom.style fontSize: '75%', marginTop: '6px'
-								Dom.text "Captured "
-								Time.deltaText capture.peek('timestamp')
-					else if capture.peek('type') is "cancel"
-						Dom.style
-							padding: '14px'
-						Dom.div !->
-							Dom.style
-								width: '70px'
-								height: '70px'
-								marginRight: '10px'
-								background: "#DDDDDD url(#{Plugin.resourceUri('markers-cancel-plain.png')}) no-repeat 10px 10px" 
-								backgroundSize: '50px 50px'
-						Dom.div !->
-							Dom.style Flex: 1, fontSize: '16px'
-							if Event.isNew(capture.peek('timestamp'))
-								Dom.style color: '#5b0'
-							Dom.text "No longer are all beacons owned by one team"
-							started = Db.shared.peek 'game', 'startTime'
-							if started?
-								Dom.div !->
-									Dom.style fontSize: '75%', marginTop: '6px'
-									Dom.text 'Happened '
-									Time.deltaText started
-					else if capture.peek('type') is "start"
-						Dom.style
-							padding: '14px'
-						Dom.div !->
-							Dom.style
-								width: '70px'
-								height: '55px'
-								marginRight: '10px'
-								background: '#DDDDDD'
-								backgroundSize: 'cover'
-								paddingTop: '15px'
-							Dom.div !->
-								Dom.style
-									margin: '0 0 0 20px'
-									borderLeft: '34px solid #FFFFFF'
-									borderTop: '20px solid transparent'
-									borderBottom: '20px solid transparent'
-						Dom.div !->
-							Dom.style Flex: 1, fontSize: '16px'
-							if Event.isNew(capture.peek('timestamp'))
-								Dom.style color: '#5b0'
-							Dom.text "Start of the game!"
-							started = Db.shared.peek 'game', 'startTime'
-							if started?
-								Dom.div !->
-									Dom.style fontSize: '75%', marginTop: '6px'
-									Dom.text 'Started '
-									Time.deltaText started
-					else if capture.peek('type') is "end"
-						teamId = Db.shared.peek('game', 'firstTeam')
-						teamColor = Shared.teams[teamId].hex
-						teamName = Shared.teams[teamId].name
-						Dom.style
-							padding: '14px'
-						Dom.div !->
-							Dom.style
-								width: '70px'
-								height: '70px'
-								marginRight: '10px'
-								background: teamColor + " url(#{Plugin.resourceUri('ranking-plain.png')}) no-repeat 10px 10px"
-								backgroundSize: '50px 50px'
-						Dom.div !->
-							Dom.style Flex: 1, fontSize: '16px'
-							if Event.isNew(capture.peek('timestamp'))
-								Dom.style color: '#5b0'
-							Dom.text "Team " + teamName + " won the game"
-							started = Db.shared.peek 'game', 'startTime'
-							if started?
-								Dom.div !->
-									Dom.style fontSize: '75%', marginTop: '6px'
-									Dom.text 'Started '
-									Time.deltaText started
-		, (capture) -> (-capture.key())
 
 
 # =============== Map functions ===============
@@ -1023,8 +841,14 @@ renderMap = ->
 		clusterSpreadMultiplier: 2
 		latlong: Db.local.peek('lastMapLocation') ? "52.444553, 5.740644"
 	, (map) !->
-		# Save location+zoom for restoring later
 		Obs.observe !->
+			# Switch to certain coordinates
+			if (sLatlong = Db.local.get 'switchToMapLocation')? and (sZoom = Db.local.get 'switchToMapZoom')?
+				map.setLatLong sLatlong
+				map.setZoom sZoom
+				Db.local.remove 'switchToMapLocation'
+				Db.local.remove 'switchToMapZoom'
+			# Save location+zoom for restoring later
 			Db.local.set 'lastMapLocation', map.getLatlong()
 			Db.local.set 'lastMapZoom', map.getZoom()
 		renderLocation map
@@ -1128,20 +952,16 @@ indicationArrowListener = () !->
 
 # Convert a location to a LatLng object
 convertLatLng = (location) ->
-	return L.latLng(location.lat, location.lng)	
+	return L.latLng(location.lat, location.lng)
 
 # Compare 2 locations to see if they are the same
 sameLocation = (location1, location2) ->
 	#log "sameLocation(), location1: ", location1, ", location2: ", location2
 	return location1? and location2? and location1.lat is location2.lat and location1.lng is location2.lng
 
-# Check if the map can be used	
-mapReady = ->
-	return L? and map? and L isnt undefined and map isnt undefined
-
 #Loop through all beacons see if they are still within boundaryRectangle
 checkAllBeacons = !->
-	if beaconCircles? and beaconMarkers? and locationOne? and locationTwo? and mapReady()
+	if beaconCircles? and beaconMarkers? and locationOne? and locationTwo?
 		bounds = L.latLngBounds(locationOne.getLatLng(), locationTwo.getLatLng())
 		for key of beaconCircles
 			if !bounds.contains(beaconCircles[key].getBounds())

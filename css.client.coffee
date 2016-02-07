@@ -1,21 +1,4 @@
 Dom.css
-# Main content page
-	'.bar-button':
-		height: '100%'
-		width: '50%'
-		float: 'left'
-		color: 'white'
-		lineHeight: '50px'
-		textAlign: 'center'
-		borderRight: '2px solid rgba(255,255,255,0.3)'
-		boxSizing: 'border-box'
-		backgroundColor: 'transparent'
-	'.bar-button:last-of-type':
-		borderRight: '0 none'
-	'.bar-button:hover':
-		backgroundColor:'rgba(0, 0, 0, 0.1)'
-	'.bar-button:active':
-		backgroundColor: 'rgba(0,0,0,0.2) !important'
 # Plugin setup pages
 	'.stepbar': # The bar at the top
 		color: 'white'
@@ -87,36 +70,6 @@ Dom.css
 		cursor: 'default'
 	'.stepbar-disable:active':
 		backgroundColor: 'transparent !important'
-# Team selection elements
-	'.team-text':
-		margin: '0 10px 5px 0'
-	'.team-button':
-		float: 'left'
-		width: '50px'
-		height: '50px'
-		lineHeight: '50px'
-		margin: '0 2px 2px 0'
-		fontSize: '25px'
-		textAlign: 'center'
-		backgroundColor: '#CCCCCC'
-	'.team-button-current':
-		backgroundColor: '#0077cf !important'
-		color: '#FFFFFF'
-# Time unit selection buttons
-	'.time-text':
-		margin: '0 10px 5px 0'
-	'.time-button':
-		float: 'left'
-		height: '50px'
-		lineHeight: '50px'
-		margin: '0 2px 2px 0'
-		padding: '0 10px 0 10px'
-		fontSize: '20px'
-		textAlign: 'center'
-		backgroundColor: '#CCCCCC'
-	'.time-button-current':
-		backgroundColor: '#0077cf !important'
-		color: '#FFFFFF'
 
 # Scores page
 	'.teampage':
