@@ -4,6 +4,8 @@ Obs = require 'obs'
 Plugin = require 'plugin'
 Page = require 'page'
 
+Shared = require 'shared'
+
 # Ranking page
 exports.render = !->
 	Page.setTitle !->

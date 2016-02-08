@@ -21,17 +21,22 @@ Events = require 'events'
 Ranking = require 'ranking'
 
 ### TODO
-- Switch to new latlong format
 - Reimplement some stat tracking
 - Work in sandbox
 - Events and log page to other files
-- Setup
-- Translate things
+- Fix Translate things
 - conversion:
     - lat+lng -> latlong (beacons)
+- client side checkinlocation() throttling (1x per x seconds?)
+- inrangeplayers as avatars in beacon popups?
+- click map to hide popup
 ###
 
 showPopupO = Obs.create() # Beacon key or -1 for user popup
+Obs.observe !->
+	if (sPopup = Db.local.get('switchToPopup'))?
+		showPopupO.set sPopup
+		Db.local.remove 'switchToPopup'
 tapFunction = undefined
 longTapFunction = undefined
 
@@ -327,36 +332,32 @@ addProgressBar = !->
 					if nextPercentage != dbPercentage
 						time = Math.abs(dbPercentage-nextPercentage) * 300
 					log "nextPercentage = ", nextPercentage, ", dbPercentage = ", dbPercentage, ", time = ", time, ", action = ", action, "actionStarted=", actionStarted
+					Dom.style
+						height: "25px"
+						width: "100%"
+						boxShadow: 'rgba(0, 0, 0, 0.6) 0px 2px 6px 0px'
+						backgroundColor: 'rgba(0, 0, 0, 0.3)'
+						border: '0'
 					Dom.div !->
 						Dom.style
 							height: "25px"
-							width: "100%"
-							position: 'absolute'
-							left: '0'
-							top: '50px'
-							boxShadow: 'rgba(0, 0, 0, 0.6) 0px 2px 6px 0px'
-							backgroundColor: 'rgba(0, 0, 0, 0.3)'
-							border: '0'
-						Dom.div !->
-							Dom.style
-								height: "25px"
-								background_: 'linear-gradient(to bottom,  rgba(0,0,0,0) 0%,rgba(0,0,0,0.3) 100%)'
-								backgroundColor: nextColor
-								zIndex: "10"
-							Dom._get().style.width = dbPercentage + "%"
-							Dom._get().style.transition = "width " + time + "ms linear"
-							window.progressElement = Dom._get()
-							timer = () !-> window.progressElement.style.width = nextPercentage + "%"
-							window.setTimeout(timer, 100)
-						Dom.div !->
-							Dom.text barText
-							Dom.style
-								width: '100%'
-								color: 'white'
-								marginTop: '-22px'
-								textAlign: 'center'
-								fontSize: '15px'
-								_textShadow: '0 0 5px #000000, 0 0 5px #000000' # Double for extra visibility
+							background_: 'linear-gradient(to bottom,  rgba(0,0,0,0) 0%,rgba(0,0,0,0.3) 100%)'
+							backgroundColor: nextColor
+							zIndex: "10"
+						Dom._get().style.width = dbPercentage + "%"
+						Dom._get().style.transition = "width " + time + "ms linear"
+						window.progressElement = Dom._get()
+						timer = () !-> window.progressElement.style.width = nextPercentage + "%"
+						window.setTimeout(timer, 100)
+					Dom.div !->
+						Dom.text barText
+						Dom.style
+							width: '100%'
+							color: 'white'
+							marginTop: '-22px'
+							textAlign: 'center'
+							fontSize: '15px'
+							_textShadow: '0 0 5px #000000, 0 0 5px #000000' # Double for extra visibility
 
 #Renders bar when game is ended. Displays the winner and admin can restart the game
 renderEndGameBar = !->
@@ -403,17 +404,38 @@ renderSetupGuidance = !->
 		top: true
 		order: 10
 		content: !->
+			Dom.style
+				Box: 'horizontal middle'
+				backgroundColor: '#FFF'
+				padding: '3px'
+				borderBottom: '1px solid #ccc'
 			Dom.div !->
 				Dom.style
-					backgroundColor: '#FFF'
-					padding: '8px'
+					Flex: true
 					fontSize: '18px'
 					textAlign: 'center'
-					borderBottom: '1px solid #ccc'
 				if !Shared.isAdmin()
 					Dom.text 'The admin is setting up a new game!'
 					return
 				Dom.text 'Setup a game...'
+			if Shared.isAdmin()
+				canStart = Obs.create false
+				Obs.observe !->
+					log 'count='+Db.shared.count('game', 'beacons').get()
+					canStart.set (Db.shared.count('game', 'beacons').get() > 0)
+				Ui.button !->
+					Dom.text 'Start game'
+					if canStart.get()
+						Dom.style background: '', color: '', border: 'solid 1px transparent'
+						Dom.onTap !->
+							Server.send 'startGame'
+					else
+						Dom.style
+							background: '#f4f4f4'
+							color: '#666'
+							border: 'solid 1px #666'
+						Dom.onTap !->
+							Modal.show 'First place some beacons, ten or more is recommended'
 
 
 renderSetupOptions = !->
@@ -852,7 +874,8 @@ renderMap = ->
 		Obs.observe !->
 			# Switch to certain coordinates
 			if (sLatlong = Db.local.get 'switchToMapLocation')? and (sZoom = Db.local.get 'switchToMapZoom')?
-				map.setLatLong sLatlong
+				log 'sLatlong=', sLatlong
+				map.setLatlong sLatlong
 				map.setZoom sZoom
 				Db.local.remove 'switchToMapLocation'
 				Db.local.remove 'switchToMapZoom'
@@ -877,29 +900,47 @@ renderBeacons = (map) !->
 			# Popup div
 			Obs.observe !->
 				if showPopupO.get() is beacon.key()
-					renderPopup
-						content: !->
-							Dom.style
-								whiteSpace: 'normal'
-							if (owner = +beacon.peek('owner')) is +Shared.getTeamOfUser(Plugin.userId())
-								Dom.text tr('Owned by your team')
-								if Shared.beaconHoldScore is 1
-									subtext = tr('Scoring %1 point per hour while held', Shared.beaconHoldScore)
+					if Db.shared.get('gameState') is 0
+						renderPopup
+							width: 120
+							anchor: 'bottom'
+							content: !->
+								Dom.div !->
+									Dom.style Box: 'horizontal middle'
+									Dom.div !->
+										Dom.style
+											Flex: true
+										Dom.text 'Remove beacon'
+									Dom.div !->
+										Icon.render
+											data: 'cancel'
+											size: 20
+								Dom.onTap !->
+									Server.sync 'deleteBeacon', beacon.key(), !->
+										Db.shared.remove 'game', 'beacons', beacon.key()
+					else
+						renderPopup
+							width: 170
+							anchor: 'bottom'
+							content: !->
+								if (owner = +beacon.peek('owner')) is +Shared.getTeamOfUser(Plugin.userId())
+									Dom.text tr('Owned by your team')
+									if Shared.beaconHoldScore is 1
+										subtext = tr('Scoring %1 point per hour while held', Shared.beaconHoldScore)
+									else
+										subtext = tr('Scoring %1 points per hour while held', Shared.beaconHoldScore)
+									smallText subtext
+								else if owner is -1
+									Dom.text tr('Neutral beacon')
 								else
-									subtext = tr('Scoring %1 points per hour while held', Shared.beaconHoldScore)
-								smallText subtext
-							else if owner is -1
-								Dom.text tr('Neutral beacon')
-							else
-								Dom.text tr('Owned by team %1', Shared.teams[owner].name)
-							smallText tr('Next capture gives %1 points', beacon.peek('captureValue'))
-							selfInRange = false
-							beacon.iterate 'inRange', (player) !->
-								selfInRange = selfInRange || +player.key() is +Plugin.userId()
-							if selfInRange and (inrange = getInRange(beacon))?
-								Dom.text tr('In range players: %1', inrange)
-						width: 150
-						anchor: 'bottom'
+									Dom.text tr('Owned by team %1', Shared.teams[owner].name)
+								if (owner = +beacon.peek('owner')) isnt +Shared.getTeamOfUser(Plugin.userId())
+									smallText tr('Next capture gives %1 points', beacon.peek('captureValue'))
+								selfInRange = false
+								beacon.iterate 'inRange', (player) !->
+									selfInRange = selfInRange || +player.key() is +Plugin.userId()
+								if selfInRange and (inrange = getInRange(beacon))?
+									Dom.text tr('In range players: %1', inrange)
 			Dom.div !->
 				Dom.style
 					width: "22px"
@@ -937,68 +978,13 @@ renderAddBeacons = (map) !->
 		if result?
 			Modal.show(result)
 		else
-			Server.sync 'addMarker', Plugin.userId(), latlong, !->
+			Server.sync 'addMarker', latlong, !->
 				number = Math.floor((Math.random() * 10000) + 200)
 				Db.shared.set 'game', 'beacons', number, {location: latlong, owner: -1}
 	Obs.onClean !->
 		tapFunction = longTapFunction = undefined
 
-# Listener that checks for clicking the map
-addMarkerListener = (event) !->
-	log 'click: ', event
-	beaconRadius = Db.shared.get('game', 'beaconRadius')
-	#Check if marker is not close to other marker
-	tooClose= false;
-	result = ''
-	Db.shared.iterate 'game', 'beacons', (beacon) !->
-		location = L.latLng(beacon.peek('location', 'lat'), beacon.peek('location', 'lng'))
-		if location?
-			#log 'location='+location+', lat='+beacon.peek('location', 'lat')+', lng='+beacon.peek('location', 'lng')+', beacon=', beacon, ', key='+beacon.key()
-			if event.latlng.distanceTo(location) < beaconRadius*2 and !tooClose
-				tooClose = true;
-				result = 'Beacon is placed too close to other beacon'
-	#Check if marker area is passing the game border
-	if !tooClose
-		outsideGame = !boundaryRectangle.getBounds().contains(event.latlng)
-		if outsideGame
-			result = 'Beacon is outside the game border'
-
-	if tooClose or outsideGame
-		Modal.show(result)
-	else
-		Server.sync 'addMarker', Plugin.userId(), event.latlng, !->
-			Obs.observe !->
-				log 'Prediction add marker'
-				number = Math.floor((Math.random() * 10000) + 200)
-				Db.shared.set 'game', 'beacons', number, {location: {lat: event.latlng.lat, lng: event.latlng.lng}, owner: -1}
-
-# Listener for updating your location indicator
-indicationArrowListener = () !->
-	indicationArrowRedraw.incr()
-	window.inRangeCheckinCount[Plugin.groupCode()] = 0 # Player is active, reset count
-
-# Convert a location to a LatLng object
-convertLatLng = (location) ->
-	return L.latLng(location.lat, location.lng)
-
-# Compare 2 locations to see if they are the same
-sameLocation = (location1, location2) ->
-	#log "sameLocation(), location1: ", location1, ", location2: ", location2
-	return location1? and location2? and location1.lat is location2.lat and location1.lng is location2.lng
-
-#Loop through all beacons see if they are still within boundaryRectangle
-checkAllBeacons = !->
-	if beaconCircles? and beaconMarkers? and locationOne? and locationTwo?
-		bounds = L.latLngBounds(locationOne.getLatLng(), locationTwo.getLatLng())
-		for key of beaconCircles
-			if !bounds.contains(beaconCircles[key].getBounds())
-				Server.sync 'deleteBeacon', Plugin.userId(), beaconCircles[key].getLatLng()
-				map.removeLayer beaconCircles[key]
-				delete beaconCircles[key]
-				map.removeLayer beaconMarkers[key]
-				delete beaconMarkers[key]
-
-# Render the location of the user on the map (currently broken)
+# Render the location of the user on the map, pointer if offscreen, and check for beacon capturing
 renderLocation = (map) !->
 	# Marker on the map
 	Obs.observe !->
@@ -1094,7 +1080,6 @@ renderLocation = (map) !->
 							Ui.avatar avatarKey, size: 44, style:
 								display: 'block'
 								margin: '0'
-								border: '0 none'
 						Dom.div !->
 							Dom.style
 								overflow: "hidden"
@@ -1114,26 +1099,40 @@ renderLocation = (map) !->
 									marginTop: "35px"
 									textAlign: 'center'
 								Dom.text getDistanceString map.getLatlongNW(), location
+	Dom.css
+		'.pointerArrow:after':
+			content: "''"
+			display: 'block'
+			width: '0'
+			height: '0'
+			top: '-7px'
+			left: '21px'
+			borderBottom: 'solid 8px #0077cf'
+			borderLeft: 'solid 5px transparent'
+			borderRight: 'solid 5px transparent'
+			position: 'absolute'
+
 	# Check for beacon capturing
 	Obs.observe !->
 		if Db.shared.peek('gameState') is 1 # Only when the game is running, do something
 			return if !Geoloc.isSubscribed()
-			state = Geoloc.track()
+			state = Geoloc.track(100, 0)
 			return if !state
 			Obs.observe !->
+				location = state.get('latlong')
+				accuracy = state.get('accuracy')
+				return if !location?
 				Db.shared.iterate 'game', 'beacons', (beacon) !->
-					distance = Map.distance(state.get('latlong'), beacon.get('location'))
-					log 'distance=', distance, 'beacon=', beacon
+					distance = Map.distance(location, beacon.get('location'))
+					#log 'distance=', distance, 'beacon=', beacon
 					beaconRadius = Db.shared.peek('game', 'beaconRadius')
 					within = distance - beaconRadius <= 0
 					deviceId = Db.local.peek('deviceId')
 					inRangeValue = beacon.peek('inRange', Plugin.userId(), 'device')
-					accuracy = state.get('accuracy')
 					checkinLocation = !->
-						[lat,lng] = state.peek('latlong').split(',')
 						if +Db.shared.peek('gameState') is 1
-							log 'checkinLocation: user='+Plugin.userName(Plugin.userId())+' ('+Plugin.userId()+'), deviceId='+deviceId+', accuracy='+accuracy+', gameState='+parseInt(Db.shared.peek('gameState'))
-							Server.send 'checkinLocation', Plugin.userId(), {lat: lat, lng: lng}, deviceId, accuracy
+							log 'checkinLocation: user='+Plugin.userName()+' ('+Plugin.userId()+'), deviceId='+deviceId+', accuracy='+accuracy+', gameState='+Db.shared.peek('gameState')
+							Server.send 'checkinLocation', location, deviceId, accuracy
 					if within
 						log 'accuracy='+accuracy+', beaconRadius='+beaconRadius
 						if accuracy > beaconRadius # Deny capturing with low accuracy
@@ -1181,7 +1180,7 @@ hexToRGBA = (hex, opacity) ->
 
 #Returns the players that are inrange of the given beacon
 getInRange = (beacon) ->
-	players = undefined;
+	players = undefined
 	beacon.iterate 'inRange', (user) !->
 		if players?
 			players = players+', '+Plugin.userName(user.key())
@@ -1223,7 +1222,6 @@ renderPopup = (opts) !->
 			textAlign: "center"
 			overflow: "visible"
 			textOverflow: 'ellipsis'
-			whiteSpace: 'nowrap'
 			lineHeight: "125%"
 			zIndex: "10000000"
 			color: "#222"
@@ -1292,18 +1290,16 @@ styleTransformAngle = (anchor, to) !->
 	[anchorLat,anchorLong] = anchor.split(",")
 	[lat,long] = to.split(",")
 	pi = 3.14159265
-	difLat = Math.abs(lat - anchorLat)
-	difLng = Math.abs(long - anchorLong)
-	angle = 0
-	if long > anchorLong and lat > anchorLat
-		angle = Math.atan(difLng/difLat)
-	else if long > anchorLong and lat <= anchorLat
-		angle = Math.atan(difLat/difLng)+ pi/2
-	else if long <= anchorLong and lat <= anchorLat
-		angle = Math.atan(difLng/difLat)+ pi
-	else if long <= anchorLong and lat > anchorLat
-		angle = (pi-Math.atan(difLng/difLat)) + pi
-	t = "rotate(" +angle + "rad)"
+	anchorLat = anchorLat * pi / 180
+	lat = lat * pi / 180
+	dLon = (long-anchorLong) * pi / 180
+	y = Math.sin(dLon) * Math.cos(lat)
+	x = Math.cos(anchorLat)*Math.sin(lat) - Math.sin(anchorLat)*Math.cos(lat)*Math.cos(dLon)
+	bearing = Math.atan2(y, x) * 180 / pi
+	if bearing < 0
+		bearing = bearing + 360
+	bearing = bearing*(pi/180)
+	t = "rotate(" +bearing + "rad)"
 	Dom.style
 		mozTransform: t
 		msTransform: t

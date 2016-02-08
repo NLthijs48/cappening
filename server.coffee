@@ -11,7 +11,6 @@ Shared = require 'shared'
 # Game install
 exports.onInstall = ->
 	initializeGame()
-	#registerPlugin()
 
 # Game update
 exports.onUpgrade = ->
@@ -49,21 +48,21 @@ exports.onConfig = (config) ->
 exports.onGeoloc = (userId, geoloc) ->
 	#log '[onGeoloc()] Geoloc from ' + Plugin.userName(userId) + '('+userId+'): ', JSON.stringify(geoloc)
 	recieved = new Date()/1000
-	if Db.shared.peek('gameState') is 1 and (recieved - (Db.personal(userId).peek('lastNotification', 'recieved') || 0))> 60*60
+	if Db.shared.peek('gameState') is 1 and (recieved - (Db.personal(userId).peek('lastNotification', 'recieved') || 0)) > 60*60
 		beaconRadius = Db.shared.peek('game', 'beaconRadius')
-		found= false;
-		#Check if user is in range of an enemy beacon, opening the app will capture the beacon
+		found = false
+		# Check if user is in range of an enemy beacon, opening the app will capture the beacon
 		Db.shared.iterate 'game', 'beacons', (beacon)!->
 			if (parseInt(beacon.peek('owner'),10) != parseInt(Shared.getTeamOfUser(userId),10)) and !found
-				if distance(geoloc.latitude, geoloc.longitude, beacon.peek('location', 'lat'), beacon.peek('location', 'lng')) < beaconRadius
-					found= true;
+				if distance(geoloc.latlong, beacon.peek('location')) < beaconRadius
+					found = true
 					if beacon.key() isnt Db.personal(userId).peek('lastNotification', 'beaconNumber')
-						#send notifcation
+						# send notifcation
 						Event.create
 							unit: 'inRange'
 							include: userId
 							text: 'You are in range of an enemy beacon, capture it now!'
-						#Last notification send, so that the user will not be spammed with notifications
+						# Last notification send, so that the user will not be spammed with notifications
 						Db.personal(userId).set('lastNotification', 'recieved', recieved)
 						Db.personal(userId).set('lastNotification', 'beaconNumber', beacon.key())
 
@@ -115,11 +114,11 @@ exports.client_restartGame = restartGame =  () ->
 	initializeGame()
 
 # Add a beacon (during setup phase)
-exports.client_addMarker = (client, location) ->
+exports.client_addMarker = (location) ->
 	return if !Shared.isAdmin()
 
 	if Db.shared.peek('gameState') isnt 0
-		log '[addMarker()] '+Plugin.userName(client), ' (id=', client, ') tried to add a marker while game is not in setup phase!'
+		log '[addMarker()] '+Plugin.userName(), ' (id=', Plugin.userId(), ') tried to add a marker while game is not in setup phase!'
 	else
 		log '[addMarker()] Adding marker: '+location
 		nextNumber = 0
@@ -134,17 +133,15 @@ exports.client_addMarker = (client, location) ->
 			action: 'none'
 
 # Delete a beacon (during setup phase)
-exports.client_deleteBeacon = (client, location) ->
+exports.client_deleteBeacon = (key) ->
 	return if !Shared.isAdmin()
 
 	#Finding the right beacon
 	if Db.shared.peek('gameState') isnt 0
-		log '[deleteBeacon()] '+Plugin.userName(client), ' (id=', client, ') tried to delete a beacon while game is not in setup phase!'
+		log '[deleteBeacon()] '+Plugin.userName(), ' (id=', Plugin.userId(), ') tried to delete a beacon while game is not in setup phase!'
 	else
-		Db.shared.iterate 'game', 'beacons', (beacon) !->
-			if beacon.get('location') is location
-				log '[deleteBeacon()] Deleted beacon: key='+beacon.key()+', location='+location
-				Db.shared.remove 'game', 'beacons', beacon.key()
+		log '[deleteBeacon()] Deleted beacon: key='+key
+		Db.shared.remove 'game', 'beacons', key
 
 # Set the round time unit and number
 exports.client_setRoundTime = (roundTimeNumber, roundTimeUnit) ->
@@ -160,12 +157,6 @@ exports.client_setTeams = (teams) ->
 
 	log '[setTeams()] Teams set to: ', teams
 	Db.shared.set 'game', 'numberOfTeams', teams
-
-# Set the game boundaries
-exports.client_setBounds = (one, two) ->
-	return if !Shared.isAdmin()
-
-	Db.shared.set 'game', 'bounds', {one: one, two: two}
 
 # Get clients ingame user ID
 # exports.client_getIngameUserId = (client) ->
@@ -219,47 +210,51 @@ exports.client_startGame = ->
 
 
 # Checkin location for capturing a beacon
-exports.client_checkinLocation = (client, location, device, accuracy) ->
+exports.client_checkinLocation = (location, device, accuracy) ->
 	if Db.shared.peek('gameState') isnt 1
-		log '[checkinLocation()] Client ', client, ' (', Plugin.userName(client), ') tried to capture beacon while game is not running!'
+		log '[checkinLocation()]', Plugin.userName(), ' (', Plugin.userId(), ') tried to capture beacon while game is not running!'
 	else
-		#log '[checkinLocation()] client: ', client, ', location: lat=', location.lat, ', lng=', location.lng
+		#log '[checkinLocation()] '+Plugin.userName()+' ('+Plugin.userId()+') location='+location+', device='+device+', accuracy='+accuracy
+		if !location?
+			log '  Incorrect location: '+location
+			return
 		beaconRadius = Db.shared.peek('game', 'beaconRadius')
 		Db.shared.iterate 'game', 'beacons', (beacon) ->
-			current = beacon.peek('inRange', client, 'device')?
-			beaconDistance = distance(location.lat, location.lng, beacon.peek('location', 'lat'), beacon.peek('location', 'lng'))
+			current = beacon.peek('inRange', Plugin.userId(), 'device')?
+			beaconDistance = distance(location, beacon.get('location'))
 			newStatus = beaconDistance < beaconRadius
+			#log 'distance='+beaconDistance, 'newstatus='+newStatus, 'currentstatus='+current
 			if newStatus != current
 				# Cancel timers of ongoing caputes/neutralizes (new ones will be set below if required)
 				Timer.cancel 'onCapture', {beacon: beacon.key()}
 				Timer.cancel 'onNeutralize', {beacon: beacon.key()}
-				removed = undefined;
+				removed = undefined
 				owner = beacon.peek 'owner'
 				if newStatus
 					if not device? # Deal with old clients by denying them to be added to inRange
-						log '[checkinLocation()] Denied adding to inRange, no deviceId provided: id=' + client + ', name=' + Plugin.userName(client)
+						log '[checkinLocation()] Denied adding to inRange, no deviceId provided: id=' + Plugin.userId() + ', name=' + Plugin.userName()
 						return
 					if accuracy > beaconRadius
-						log '[checkinLocation()] Denied adding to inRange of '+Plugin.userName(client)+' ('+client+'), accuracy too low: '+accuracy+'m'
+						log '[checkinLocation()] Denied adding to inRange of '+Plugin.userName()+' ('+Plugin.userId()+'), accuracy too low: '+accuracy+'m'
 						return
-					log '[checkinLocation()] Added to inRange: id=' + client + ', name=' + Plugin.userName(client) + ', deviceId=' + device
-					beacon.set 'inRange', client, 'device', device
-					refreshInrangeTimer(client, device)
+					log '[checkinLocation()] Added to inRange: id=' + Plugin.userId() + ', name=' + Plugin.userName() + ', deviceId=' + device
+					beacon.set 'inRange', Plugin.userId(), 'device', device
+					refreshInrangeTimer(Plugin.userId(), device)
 				else
-					inRangeDevice = beacon.peek('inRange', client, 'device')
+					inRangeDevice = beacon.peek('inRange', Plugin.userId(), 'device')
 					if inRangeDevice == device
-						log '[checkinLocation()] Removed from inRange: id=' + client + ', name=' + Plugin.userName(client) + ', deviceId=' + device
+						log '[checkinLocation()] Removed from inRange: id=' + Plugin.userId() + ', name=' + Plugin.userName() + ', deviceId=' + device
 						# clean takeover
-						beacon.remove 'inRange', client
-						removed = client
-						Timer.cancel 'inRangeTimeout', {beacon: beacon.key(), client: client}
+						beacon.remove 'inRange', Plugin.userId()
+						removed = Plugin.userId()
+						Timer.cancel 'inRangeTimeout', {beacon: beacon.key(), client: Plugin.userId()}
 					else
-						log '[checkinLocation()] Denied removing from inRange, deviceId does not match: id=' + client + ', name=' + Plugin.userName(client) + ', deviceId=' + device, ', inRangeDevice=' + inRangeDevice
+						log '[checkinLocation()] Denied removing from inRange, deviceId does not match: id=' + Plugin.userId() + ', name=' + Plugin.userName() + ', deviceId=' + device, ', inRangeDevice=' + inRangeDevice
 				#log 'removed=', removed
 				updateBeaconStatus(beacon, removed)
 			else
 				if current
-					refreshInrangeTimer(client, device)
+					refreshInrangeTimer(Plugin.userId(), device)
 
 #Update tutorial state
 exports.client_updateTutorialState = (userId, content) ->
@@ -582,7 +577,7 @@ updateTeamRankings = ->
 getTeamScore = (team) ->
 	result = Db.shared.peek 'game', 'teams', team, 'teamScore'
 	Db.shared.iterate 'game', 'teams', team, 'users', (user) !->
-		result+=user.peek('userScore')
+		result += user.peek('userScore')
 	return result
 
 # Setup an empty game
@@ -597,7 +592,6 @@ initializeGame = ->
 			Timer.cancel 'inRangeTimeout', {beacon: beacon.key(), client: client.key()}
 	# Reset database to defaults
 	Db.shared.set 'game', {}
-	#Db.shared.set 'game', 'bounds', {one: {lat: 52.249822176849, lng: 6.8396973609924}, two: {lat: 52.236578295702, lng: 6.8598246574402}} # TOOD remove
 	Db.shared.set 'game', 'numberOfTeams', 2
 	Db.shared.set 'game', 'beaconRadius', 200
 	Db.shared.set 'game', 'roundTimeUnit', 'Days'
@@ -622,14 +616,23 @@ setTimer = ->
 	Timer.cancel 'endGame', {}
 	Timer.set seconds*1000, 'endGame', {} #endGame is the function called when the timer ends
 
-# Calculate distance
-distance = (inputLat1, inputLng1, inputLat2, inputLng2) ->
-	r = 6378137
-	rad = Math.PI / 180
-	lat1 = inputLat1 * rad
-	lat2 = inputLat2 * rad
-	a = Math.sin(lat1) * Math.sin(lat2) + Math.cos(lat1) * Math.cos(lat2) * Math.cos((inputLng2 - inputLng1) * rad);
-	return r * Math.acos(Math.min(a, 1));
+# https://stackoverflow.com/questions/27928/calculate-distance-between-two-latitude-longitude-points-haversine-formula
+distance = (latlong1, latlong2) ->
+	[lat1,lon1] = latlong1.split(',')
+	[lat2, lon2] = latlong2.split(',')
+	R = 6371000; # Radius of the earth in m
+	dLat = deg2rad(lat2-lat1)
+	dLon = deg2rad(lon2-lon1)
+	a =
+		Math.sin(dLat/2) * Math.sin(dLat/2) +
+		Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
+		Math.sin(dLon/2) * Math.sin(dLon/2)
+	c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a))
+	d = R * c # Distance in m
+	return d
+
+deg2rad = (degrees) ->
+	degrees * (Math.PI/180)
 
 # Returns team with the highest score
 getFirstTeam = ->

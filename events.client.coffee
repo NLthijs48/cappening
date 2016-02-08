@@ -5,6 +5,10 @@ Event = require 'event'
 Plugin = require 'plugin'
 Page = require 'page'
 Ui = require 'ui'
+Time = require 'time'
+Toast = require 'toast'
+
+Shared = require 'shared'
 
 # Eventlog page
 exports.render = !->
@@ -19,7 +23,7 @@ exports.render = !->
 				Ui.item !->
 					Dom.style
 						padding: '14px'
-					if capture.peek('type') is "capture" and mapReady()
+					if capture.peek('type') is "capture"
 						beaconId = capture.peek('beacon')
 						teamId = capture.peek('conqueror')
 						teamColor = Shared.teams[teamId].hex
@@ -32,8 +36,9 @@ exports.render = !->
 									Dom.text " by " + Shared.userStringToFriendly(capture.peek('members')) + ' of team ' + teamName
 								else
 									Dom.text ' by team '+teamName
-							Db.local.set 'switchToMapLocation', Db.shared.peek('game', 'beacons' ,beaconId, 'location', 'lat')+':'+Db.shared.peek('game', 'beacons' ,beaconId, 'location', 'lng')
+							Db.local.set 'switchToMapLocation', Db.shared.peek('game', 'beacons', beaconId, 'location')
 							Db.local.set 'switchToMapZoom', 16
+							Db.local.set 'switchToPopup', beaconId
 							Page.nav()
 						Dom.div !->
 							Dom.style
@@ -68,8 +73,9 @@ exports.render = !->
 									Dom.text " by " + Shared.userStringToFriendly(capture.peek('members')) + ' of team ' + teamName
 								else
 									Dom.text ' by team '+teamName
-							Db.local.set 'switchToMapLocation', Db.shared.peek('game', 'beacons', beaconId, 'location', 'lat')+':'+Db.shared.peek('game', 'beacons', beaconId, 'location', 'lng')
+							Db.local.set 'switchToMapLocation', Db.shared.peek('game', 'beacons', beaconId, 'location')
 							Db.local.set 'switchToMapZoom', 16
+							Db.local.set 'switchToPopup', beaconId
 							Page.nav()
 						Dom.div !->
 							Dom.style
