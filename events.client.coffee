@@ -1,14 +1,6 @@
-Db = require 'db'
-Dom = require 'dom'
-Obs = require 'obs'
-Event = require 'event'
-Plugin = require 'plugin'
-Page = require 'page'
-Ui = require 'ui'
-Time = require 'time'
-Toast = require 'toast'
-
 Shared = require 'shared'
+Config = Shared.config()
+tr = I18n.tr
 
 # Eventlog page
 exports.render = !->
@@ -26,8 +18,8 @@ exports.render = !->
 					if capture.peek('type') is "capture"
 						beaconId = capture.peek('beacon')
 						teamId = capture.peek('conqueror')
-						teamColor = Shared.teams[teamId].hex
-						teamName = Shared.teams[teamId].name
+						teamColor = Config.teams[teamId].hex
+						teamName = Config.teams[teamId].name
 						Dom.onTap !->
 							Toast.show !->
 								Dom.text 'Captured '
@@ -45,7 +37,7 @@ exports.render = !->
 								width: '70px'
 								height: '70px'
 								marginRight: '10px'
-								background: teamColor+" url(#{Plugin.resourceUri('marker-plain.png')}) no-repeat 10px 10px"
+								background: teamColor+" url(#{App.resourceUri('marker-plain.png')}) no-repeat 10px 10px"
 								backgroundSize: '50px 50px'
 						Dom.div !->
 							Dom.style Flex: 1, fontSize: '100%'
@@ -62,8 +54,8 @@ exports.render = !->
 					else if capture.peek('type') is "captureAll"
 						beaconId = capture.peek('beacon')
 						teamId = capture.peek('conqueror')
-						teamColor = Shared.teams[teamId].hex
-						teamName = Shared.teams[teamId].name
+						teamColor = Config.teams[teamId].hex
+						teamName = Config.teams[teamId].name
 						log "print capture: teamId; " + teamId
 						Dom.onTap !->
 							Toast.show !->
@@ -82,7 +74,7 @@ exports.render = !->
 								width: '70px'
 								height: '70px'
 								marginRight: '10px'
-								background: teamColor+" url(#{Plugin.resourceUri('markers-plain.png')}) no-repeat 10px 10px" 
+								background: teamColor+" url(#{App.resourceUri('markers-plain.png')}) no-repeat 10px 10px" 
 								backgroundSize: '50px 50px'
 						Dom.div !->
 							Dom.style Flex: 1, fontSize: '100%'
@@ -97,8 +89,8 @@ exports.render = !->
 								Time.deltaText capture.peek('timestamp')
 					else if capture.peek('type') is "score"
 						teamId = capture.peek('leading')
-						teamColor = Shared.teams[teamId].hex
-						teamName = Shared.teams[teamId].name
+						teamColor = Config.teams[teamId].hex
+						teamName = Config.teams[teamId].name
 						Dom.onTap !->
 							Page.nav 'scores'
 						Dom.div !->
@@ -106,7 +98,7 @@ exports.render = !->
 								width: '70px'
 								height: '70px'
 								marginRight: '10px'
-								background: teamColor+" url(#{Plugin.resourceUri('rank-switch.png')}) no-repeat 10px 10px" 
+								background: teamColor+" url(#{App.resourceUri('rank-switch.png')}) no-repeat 10px 10px" 
 								backgroundSize: '50px 50px'
 						Dom.div !->
 							Dom.style Flex: 1, fontSize: '100%'
@@ -125,7 +117,7 @@ exports.render = !->
 								width: '70px'
 								height: '70px'
 								marginRight: '10px'
-								background: "#DDDDDD url(#{Plugin.resourceUri('markers-cancel-plain.png')}) no-repeat 10px 10px" 
+								background: "#DDDDDD url(#{App.resourceUri('markers-cancel-plain.png')}) no-repeat 10px 10px" 
 								backgroundSize: '50px 50px'
 						Dom.div !->
 							Dom.style Flex: 1, fontSize: '16px'
@@ -168,8 +160,8 @@ exports.render = !->
 									Time.deltaText started
 					else if capture.peek('type') is "end"
 						teamId = Db.shared.peek('game', 'firstTeam')
-						teamColor = Shared.teams[teamId].hex
-						teamName = Shared.teams[teamId].name
+						teamColor = Config.teams[teamId].hex
+						teamName = Config.teams[teamId].name
 						Dom.style
 							padding: '14px'
 						Dom.div !->
@@ -177,7 +169,7 @@ exports.render = !->
 								width: '70px'
 								height: '70px'
 								marginRight: '10px'
-								background: teamColor + " url(#{Plugin.resourceUri('ranking-plain.png')}) no-repeat 10px 10px"
+								background: teamColor + " url(#{App.resourceUri('ranking-plain.png')}) no-repeat 10px 10px"
 								backgroundSize: '50px 50px'
 						Dom.div !->
 							Dom.style Flex: 1, fontSize: '16px'

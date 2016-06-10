@@ -1,10 +1,6 @@
-Ui = require 'ui'
-Db = require 'db'
-Obs = require 'obs'
-Plugin = require 'plugin'
-Page = require 'page'
-
 Shared = require 'shared'
+Config = Shared.config()
+tr = I18n.tr
 
 # Ranking page
 exports.render = !->
@@ -14,8 +10,8 @@ exports.render = !->
 		Dom.style
 			padding: '0'
 		Db.shared.iterate 'game', 'teams', (team) !->
-			teamColor = Shared.teams[team.key()].hex
-			teamName = Shared.teams[team.key()].name
+			teamColor = Config.teams[team.key()].hex
+			teamName = Config.teams[team.key()].name
 			teamScore = Db.shared.get('game', 'teams', team.key(), 'teamScore')
 			# list of teams and their scores
 			expanded = Obs.create(false)
@@ -52,23 +48,23 @@ exports.render = !->
 				Dom.div !->
 					Dom.style fontSize: '100%', paddingLeft: '84px'
 					Dom.text "Team " + teamName + " scored " + teamScore + " points"
-					if parseInt(team.key()) is parseInt(Shared.getTeamOfUser(Plugin.userId()))
+					if parseInt(team.key()) is parseInt(Shared.getTeamOfUser(App.userId()))
 						Dom.style fontWeight: 'bold'
 					# To Do expand voor scores
-					if expanded.get() || Plugin.users.count().peek() <= 10
+					if expanded.get() || App.users.count().peek() <= 10
 						team.iterate 'users', (user) !->
 							Dom.div !->
-								if parseInt(user.key())  isnt Plugin.userId()
+								if parseInt(user.key())  isnt App.userId()
 									Dom.style fontWeight: 'normal'
 								Dom.style clear: 'both'
-								Ui.avatar Plugin.userAvatar(user.key()),
+								Ui.avatar App.userAvatar(user.key()),
 									style: margin: '6px 10px 0 0', float: 'left'
 									size: 40
-									onTap: (!-> Plugin.userInfo(user.key()))
+									onTap: (!-> App.userInfo(user.key()))
 								Dom.div !->
 									Dom.br()
 									Dom.style fontSize: '75%', marginTop: '6px', marginRight: '6px', display: 'block', float: 'left', minWidth: '75px'
-									Dom.text Plugin.userName(user.key()) + " has: "
+									Dom.text App.userName(user.key()) + " has: "
 								Dom.div !->
 									Dom.style fontSize: '75%', marginTop: '6px', display: 'block', float: 'left'
 									Dom.text user.get('userScore') + " points"
@@ -81,7 +77,7 @@ exports.render = !->
 						Dom.div !->
 							Dom.style fontSize: '75%', marginTop: '6px'
 							Dom.text "Tap for details"
-				if Plugin.users.count().peek() > 10
+				if App.users.count().peek() > 10
 					Dom.onTap !->
 						expanded.set(!expanded.get())
 		, (team) -> team.get('ranking')

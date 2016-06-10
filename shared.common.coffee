@@ -1,6 +1,3 @@
-Plugin = require 'plugin'
-Db = require 'db'
-
 # General config values (used by client and server)
 config =
 	beaconPointsTime: 3600000	# Milliseconds between scoring points for a beacon
@@ -40,11 +37,7 @@ config =
 			name: 'purple'
 			capitalizedName: 'Purple'
 			hex: '#E637D8'
-for key,value of config
-	exports[key] = value
-
-exports.isAdmin = ->
-	Plugin.userIsAdmin(Plugin.userId()) or Plugin.userId() is Plugin.ownerId()
+exports.config = -> config
 
 # Get the team id the user is added to
 exports.getTeamOfUser = (userId) ->
@@ -61,11 +54,16 @@ exports.userStringToFriendly = (users) ->
 	split = users.split(', ')
 	if split.length is 0
 		return ""
-	result = Plugin.userName(parseInt(split[0]))
+	result = App.userName(parseInt(split[0]))
 	i=1
 	while i<(split.length-1)
-		result += ', ' + Plugin.userName(parseInt(split[i]))
+		result += ', ' + App.userName(parseInt(split[i]))
 		i++
 	if split.length > 1
-		result += ' and ' + Plugin.userName(parseInt(split[split.length-1]))
+		result += ' and ' + App.userName(parseInt(split[split.length-1]))
 	return result
+
+exports.member = ->
+	(memberId) ->
+		memberId = App.memberId() if !memberId?
+		"#{App.userName(memberId)}(#{memberId})"

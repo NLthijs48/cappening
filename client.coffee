@@ -1,30 +1,13 @@
-Db = require 'db'
-Time = require 'time'
-Dom = require 'dom'
-Modal = require 'modal'
-Obs = require 'obs'
-Plugin = require 'plugin'
-Page = require 'page'
-Server = require 'server'
-Ui = require 'ui'
-Geoloc = require 'geoloc'
-Form = require 'form'
-Icon = require 'icon'
-Toast = require 'toast'
-Event = require 'event'
-Map = require 'map'
-Markdown = require 'markdown'
-
 CSS = require 'css'
 Shared = require 'shared'
+Config = Shared.config()
+member = Shared.member()
 Events = require 'events'
 Ranking = require 'ranking'
+tr = I18n.tr
 
 ### TODO
 - Reimplement some stat tracking
-- Work in sandbox
-- Events and log page to other files
-- Fix Translate things
 - conversion:
     - lat+lng -> latlong (beacons)
 - client side checkinlocation() throttling (1x per x seconds?)
@@ -47,7 +30,7 @@ exports.render = !->
 	Obs.onClean !->
 		log 'FULL CLEAN'
 	# Compatibility check
-	if (version = Plugin.agent().android)? and version < 3.0
+	if (version = App.agent().android)? and version < 3.0
 		Dom.text 'Sorry this game is unavailable for android version 2.3 or lower'
 		log "Unsupported Android version: "+version
 		return
@@ -57,7 +40,7 @@ exports.render = !->
 		local = Db.local.peek 'gameNumber'
 		remote = Db.shared.get 'gameNumber'
 		log 'Game cleanup checked, local=', local, ', remote=', remote
-		if !local? || local != remote
+		if !local? || local isnt remote
 			log ' Cleanup performed'
 			Db.local.set 'gameNumber', remote
 			# Do cleanup stuff
@@ -81,7 +64,7 @@ exports.render = !->
 		deviceId = Db.local.peek 'deviceId'
 		if not deviceId?
 			result = Obs.create(null)
-			Server.send 'getNewDeviceId', Plugin.userId(), result.func()
+			Server.send 'getNewDeviceId', result.func()
 			Obs.observe !->
 				if result.get()?
 					log 'Got deviceId ' + result.get()
@@ -105,11 +88,11 @@ exports.renderInfo = !->
 		Dom.style marginBottom: '-10px'
 		Dom.text tr('Rewards and winning')
 	Markdown.render """
-	You gain #{Shared.beaconValueInitial} #{if Shared.beaconValueInitial is 1 then "point" else "points"} for being the first team to conquer a certain beacon.
+	You gain #{Config.beaconValueInitial} #{if Config.beaconValueInitial is 1 then "point" else "points"} for being the first team to conquer a certain beacon.
 	Beacons that are in possession of your team, will have a circle around it in your team color.
-	Every hour the beacon is in your posession, it will generate #{Shared.beaconHoldScore} #{if Shared.beaconHoldScore is 1 then "point" else "points"}.
+	Every hour the beacon is in your posession, it will generate #{Config.beaconHoldScore} #{if Config.beaconHoldScore is 1 then "point" else "points"}.
 	Unfortunately for you, your beacons can be conquered by other teams.
-	Every time a beacon is conquered the value of the beacon will drop. Scores for conquering a beacon will decrease with #{Shared.beaconValueDecrease} until a minimum of #{Shared.beaconValueMinimum}.
+	Every time a beacon is conquered the value of the beacon will drop. Scores for conquering a beacon will decrease with #{Config.beaconValueDecrease} until a minimum of #{Config.beaconValueMinimum}.
 	The team with the highest score at the end of the game wins.
 	If a team captures all beacons, the game will end quickly if the other teams stay inactive.
 	"""
@@ -143,7 +126,7 @@ renderNavigationBar = !->
 				Box: 'horizontal'
 				height: "50px"
 				boxShadow: "0 3px 10px 0 rgba(0, 0, 0, 0.3)"
-				backgroundColor: hexToRGBA(Shared.teams[Shared.getTeamOfUser(Plugin.userId())].hex, 0.9)
+				backgroundColor: hexToRGBA(Config.teams[Shared.getTeamOfUser(App.userId())].hex, 0.9)
 				_textShadow: '0 0 5px #000000, 0 0 5px #000000'
 			Dom.css
 				'.bar-button:last-of-type':
@@ -180,7 +163,7 @@ renderNavigationBar = !->
 						height: '30px'
 						verticalAlign: 'middle'
 						display: 'inline-block'
-						background: "url(#{Plugin.resourceUri('ranking.png')})"
+						background: "url(#{App.resourceUri('ranking.png')})"
 						backgroundRepeat: "no-repeat"
 						backgroundPosition: "0 0"
 						backgroundSize: "26px 26px"
@@ -233,14 +216,14 @@ addProgressBar = !->
 		content: !->
 			Db.shared.iterate 'game', 'beacons', (beacon) !->
 				action = beacon.get('action') # Subscribe to changes in action, only thing that matters
-				inRangeValue = beacon.peek('inRange', Plugin.userId(), 'device')
+				inRangeValue = beacon.peek('inRange', App.userId(), 'device')
 				if inRangeValue? and (inRangeValue is 'true' || inRangeValue is Db.local.get('deviceId'))
 					log 'Rendering progress bar'
 					Obs.onClean !->
 						log 'Cleaned progress bar...'
 					dbPercentage = beacon.peek("percentage")
 					nextPercentage = -1
-					ownTeam = Shared.getTeamOfUser(Plugin.userId())
+					ownTeam = Shared.getTeamOfUser(App.userId())
 					nextColor = ''
 					owner = beacon.peek('owner')
 					nextOwner = beacon.peek('nextOwner')
@@ -253,7 +236,7 @@ addProgressBar = !->
 							dbPercentage = 100
 						if dbPercentage < 0
 							dbPercentage = 0
-						nextColor = Shared.teams[nextOwner].hex
+						nextColor = Config.teams[nextOwner].hex
 						barText = "Capturing..."
 					else if action is "recapture"
 						nextPercentage=100
@@ -262,7 +245,7 @@ addProgressBar = !->
 							dbPercentage = 100
 						if dbPercentage < 0
 							dbPercentage = 0
-						nextColor = Shared.teams[owner].hex
+						nextColor = Config.teams[owner].hex
 						if parseInt(ownTeam) is parseInt(owner)
 							barText = "Recapturing..."
 						else
@@ -274,13 +257,13 @@ addProgressBar = !->
 							dbPercentage = 0
 						if dbPercentage > 100
 							dbPercentage = 100
-						nextColor = Shared.teams[owner].hex
+						nextColor = Config.teams[owner].hex
 						barText = "Neutralizing..."
 					else if action is "competing"
 						if owner is -1
-							nextColor = Shared.teams[nextOwner].hex
+							nextColor = Config.teams[nextOwner].hex
 						else
-							nextColor = Shared.teams[owner].hex
+							nextColor = Config.teams[owner].hex
 						fromOtherTeams = 0
 						log 'fromOtherTeams='+fromOtherTeams+', nextPercentage='+nextPercentage+', dbPercentage='+dbPercentage
 						nextPercentage = dbPercentage
@@ -324,12 +307,12 @@ addProgressBar = !->
 					else
 						nextPercentage = dbPercentage
 						if owner is -1
-							nextColor = Shared.teams[nextOwner].hex
+							nextColor = Config.teams[nextOwner].hex
 						else
-							nextColor = Shared.teams[owner].hex
+							nextColor = Config.teams[owner].hex
 						barText = "Captured"
 					time = 0
-					if nextPercentage != dbPercentage
+					if nextPercentage isnt dbPercentage
 						time = Math.abs(dbPercentage-nextPercentage) * 300
 					log "nextPercentage = ", nextPercentage, ", dbPercentage = ", dbPercentage, ", time = ", time, ", action = ", action, "actionStarted=", actionStarted
 					Dom.style
@@ -344,11 +327,12 @@ addProgressBar = !->
 							background_: 'linear-gradient(to bottom,  rgba(0,0,0,0) 0%,rgba(0,0,0,0.3) 100%)'
 							backgroundColor: nextColor
 							zIndex: "10"
-						Dom._get().style.width = dbPercentage + "%"
-						Dom._get().style.transition = "width " + time + "ms linear"
-						window.progressElement = Dom._get()
-						timer = () !-> window.progressElement.style.width = nextPercentage + "%"
-						window.setTimeout(timer, 100)
+						# TODO replace this with normal API stuff
+						#Dom._get().style.width = dbPercentage + "%"
+						#Dom._get().style.transition = "width " + time + "ms linear"
+						#window.progressElement = Dom._get()
+						#timer = () !-> window.progressElement.style.width = nextPercentage + "%"
+						#window.setTimeout(timer, 100)
 					Dom.div !->
 						Dom.text barText
 						Dom.style
@@ -373,14 +357,14 @@ renderEndGameBar = !->
 				_textShadow: '0 0 5px #000000, 0 0 5px #000000'
 				marginBottom: '30px'
 				_alignItems: 'center'
-				backgroundColor: hexToRGBA(Shared.teams[Db.shared.peek('game', 'firstTeam')].hex, 0.9)
+				backgroundColor: hexToRGBA(Config.teams[Db.shared.peek('game', 'firstTeam')].hex, 0.9)
 			Dom.div !->
 				Dom.style Flex: true
-				if parseInt(Db.shared.peek('game', 'firstTeam')) is parseInt(Shared.getTeamOfUser(Plugin.userId()))
+				if parseInt(Db.shared.peek('game', 'firstTeam')) is parseInt(Shared.getTeamOfUser(App.userId()))
 					Dom.text "Your team won the game!"
 				else
-					Dom.text "Team " + Shared.teams[Db.shared.peek('game', 'firstTeam')].name + " won, good luck next round!"
-			if Shared.isAdmin()
+					Dom.text "Team " + Config.teams[Db.shared.peek('game', 'firstTeam')].name + " won, good luck next round!"
+			if App.isAdmin()
 				Dom.div !->
 					Dom.style
 						height: "36px"
@@ -414,11 +398,11 @@ renderSetupGuidance = !->
 					Flex: true
 					fontSize: '18px'
 					textAlign: 'center'
-				if !Shared.isAdmin()
+				if !App.isAdmin()
 					Dom.text 'The admin is setting up a new game!'
 					return
 				Dom.text 'Setup a game...'
-			if Shared.isAdmin()
+			if App.isAdmin()
 				canStart = Obs.create false
 				Obs.observe !->
 					log 'count='+Db.shared.count('game', 'beacons').get()
@@ -448,7 +432,7 @@ renderSetupOptions = !->
 				Dom.div !->
 					Dom.style
 						display: 'inline-block'
-						backgroundColor: if Shared.isAdmin()  then '#ba1a6e' else '#666'
+						backgroundColor: if App.isAdmin()  then '#ba1a6e' else '#666'
 						padding: '8px 12px'
 						margin: '0 0 10px 10px'
 						fontSize: '17px'
@@ -459,17 +443,17 @@ renderSetupOptions = !->
 			renderButton !->
 				Dom.text (Db.shared.get('game', 'numberOfTeams') ? 2) + ' teams'
 				Dom.onTap !->
-					if !Shared.isAdmin()
+					if !App.isAdmin()
 						Modal.show 'Number of teams', 'The admin can change this setting'
 						return
-					if Plugin.users.count().peek() <= 2
+					if App.users.count().peek() <= 2
 						Modal.show "You cannot use more teams since you don't have enough people in your group"
 						return
 					Modal.show
 						title: 'Select number of teams'
 						buttons: false
 						content: !->
-							maxTeams = Math.max(2, Math.min(6, Plugin.users.count().get()))
+							maxTeams = Math.max(2, Math.min(6, App.users.count().get()))
 							renderOption = (count) !->
 								Ui.option
 									content: count + ' teams'
@@ -482,7 +466,7 @@ renderSetupOptions = !->
 			renderButton !->
 				Dom.text (Db.shared.get('game', 'roundTimeNumber') ? 7) + ' ' + (Db.shared.get('game', 'roundTimeUnit') ? 'days').toLowerCase()
 				Dom.onTap !->
-					if !Shared.isAdmin()
+					if !App.isAdmin()
 						Modal.show 'Duration of the game', 'The admin can change this setting'
 						return
 					roundTimeNumber = Obs.create Db.shared.peek('game', 'roundTimeNumber')
@@ -549,252 +533,6 @@ renderSetupOptions = !->
 								Db.shared.set 'game', 'roundTimeUnit', roundTimeUnit.peek()
 
 
-# =============== Page Contents ===============
-# Setup pages
-setupContent = !->
-	Page.setTitle !->
-		Dom.text 'Conquest setup'
-	if Shared.isAdmin()
-		currentPage = Db.local.get('currentSetupPage')
-		currentPage = 'setup0' if not currentPage?
-		log ' currentPage =', currentPage
-		if currentPage is 'setup0' # Setup team and round time
-			# Variables
-			numberOfTeams = Obs.create Db.shared.peek('game', 'numberOfTeams')
-			roundTimeNumber = Obs.create Db.shared.peek('game', 'roundTimeNumber')
-			roundTimeUnit = Obs.create Db.shared.peek('game', 'roundTimeUnit')
-			# Bar to indicate the setup progress
-			Dom.div !->
-				Dom.cls 'stepbar'
-				# Left button
-				Dom.div !->
-					Dom.text tr("Prev")
-					Dom.cls 'stepbar-button'
-					Dom.cls 'stepbar-left'
-					Dom.cls 'stepbar-disable'
-				# Middle block
-				Dom.div !->
-					Dom.text tr("Basic settings")
-					Dom.cls 'stepbar-middle'
-				# Right button
-				Dom.div !->
-					Dom.text tr("Next")
-					Dom.cls 'stepbar-button'
-					Dom.cls 'stepbar-right'
-					Dom.onTap !->
-						Server.send 'setTeams', numberOfTeams.get()
-						Server.send 'setRoundTime', roundTimeNumber.get(), roundTimeUnit.get()
-						Db.local.set('currentSetupPage', 'setup1')
-			Dom.div !->
-				Dom.style paddingTop: '50px'
-				# Not enough players warning
-				if Plugin.users.count().get() <= 1
-					Dom.h2 "Warning"
-					Dom.text "Be sure to invite some friends if you actually want to play the game. One cannot play alone! (You can test it out though)."
-				# Gameinfo setup page:
-				Dom.div !->
-					Dom.h2 "Game information"
-					Dom.text "For game information, click the gear or information icon on the top of the page"
-		else if currentPage is 'setup1' # Setup map boundaries
-			# Bar to indicate the setup progress
-			Dom.div !->
-				Dom.cls 'stepbar'
-				# Left button
-				Dom.div !->
-					Dom.text tr("Prev")
-					Dom.cls 'stepbar-button'
-					Dom.cls 'stepbar-left'
-					Dom.onTap !->
-						Db.local.set('currentSetupPage', 'setup0')
-				# Middle block
-				Dom.div !->
-					Dom.text tr("Select gamearea")
-					Dom.cls 'stepbar-middle'
-				# Right button
-				Dom.div !->
-					Dom.text tr("Next")
-					Dom.cls 'stepbar-button'
-					Dom.cls 'stepbar-right'
-					Dom.onTap !->
-						Db.local.set('currentSetupPage', 'setup2')
-			renderMap()
-			Obs.observe !->
-				if true
-					# Setup map corners
-					# Update the play area square thing
-					markerDragged = !->
-						if true
-							Server.sync 'setBounds', window.locationOne.getLatLng(), window.locationTwo.getLatLng(), !->
-								log 'predicting bounds change'
-								Db.shared.set 'game', 'bounds', {one: {lat: window.locationOne.getLatLng().lat, lng: window.locationOne.getLatLng().lng}, two: {lat: window.locationTwo.getLatLng().lat, lng: window.locationTwo.getLatLng().lng}}
-								log 'predicted bounds: ', {one: {lat: window.locationOne.getLatLng().lat, lng: window.locationOne.getLatLng().lng}, two: {lat: window.locationTwo.getLatLng().lat, lng: window.locationTwo.getLatLng().lng}}
-							checkAllBeacons()
-					# Corner 1
-					lat1 = Db.shared.get('game', 'bounds', 'one', 'lat')
-					lng1 =  Db.shared.get('game', 'bounds', 'one', 'lng')
-					if not lat1? or not lng1?
-						lat1 = 52.249822176849
-						lng1 = 6.8396973609924
-					loc1 = L.latLng(lat1, lng1)
-					window.locationOne = L.marker(loc1, {draggable: true})
-					locationOne.on 'dragend', !->
-						log 'marker drag 1'
-						markerDragged()
-					locationOne.addTo(map)
-					# Corner 2
-					lat2 = Db.shared.get('game', 'bounds', 'two', 'lat')
-					lng2 = Db.shared.get('game', 'bounds', 'two', 'lng')
-					if not lat2? or not lng2?
-						lat2 = 52.236578295702
-						lng2 = 6.8598246574402
-					loc2 = L.latLng(lat2, lng2)
-					window.locationTwo = L.marker(loc2, {draggable: true})
-					locationTwo.on 'dragend', !->
-						log 'marker drag 2'
-						markerDragged()
-					locationTwo.addTo(map)
-					window.boundaryRectangle = L.rectangle([loc1, loc2], {color: "#ff7800", weight: 5, clickable: false})
-					boundaryRectangle.addTo(map)
-				Obs.onClean !->
-					log 'onClean() rectangle + corners'
-					if true
-						map.removeLayer locationOne if locationOne?
-						map.removeLayer locationTwo if locationTwo?
-						map.removeLayer boundaryRectangle if boundaryRectangle?
-			# Info bar
-			Dom.div !->
-				Dom.cls 'infobar'
-				Dom.div !->
-					Dom.style
-						float: 'left'
-						marginRight: '10px'
-						width: '30px'
-						_flexGrow: '0'
-						_flexShrink: '0'
-					Icon.render data: 'info', color: '#fff', style: { paddingRight: '10px'}, size: 30
-				Dom.div !->
-					Dom.style
-						_flexGrow: '1'
-						_flexShrink: '1'
-					Dom.text "Drag the corners of the orange rectangle to define the gamearea. Click here for more information."
-				Dom.onTap !->
-					Modal.show tr("Gamearea setup information"), !->
-						Dom.div !->
-							Dom.text "Drag the corners of the orange rectangle to define the gamearea."
-							#Dom.text " Choose this area wisely, this is where the map will be limited to during the game."
-							Dom.br()
-							Dom.br()
-							Dom.text "Your own location is drawn on the map as a pushpin."
-							Dom.style maxWidth: '300px', textAlign: 'left'
-					, (ok)->
-						ok= undefined;
-					,['ok', tr("Ok")]
-
-		else if currentPage is 'setup2' # Setup beacons
-			# Bar to indicate the setup progress
-			Dom.div !->
-				Dom.cls 'stepbar'
-				# Left button
-				Dom.div !->
-					Dom.text tr("Prev")
-					Dom.cls 'stepbar-button'
-					Dom.cls 'stepbar-left'
-					Dom.onTap !->
-						Db.local.set('currentSetupPage', 'setup1')
-				# Middle block
-				Dom.div !->
-					Dom.text tr("Place beacons")
-					Dom.cls 'stepbar-middle'
-				# Right button
-				Dom.div !->
-					Dom.text tr("Start")
-					Dom.cls 'stepbar-button'
-					Dom.cls 'stepbar-right'
-					log 'setup2 new'
-					if Db.shared.count('game', 'beacons').get() >=1
-						Dom.onTap !->
-							Server.send 'startGame'
-					else
-						Dom.cls 'stepbar-disable'
-			renderMap()
-			Obs.observe !->
-				if true
-					loc1 = L.latLng(Db.shared.get('game', 'bounds', 'one', 'lat'), Db.shared.get('game', 'bounds', 'one', 'lng'))
-					loc2 = L.latLng(Db.shared.get('game', 'bounds', 'two', 'lat'), Db.shared.get('game', 'bounds', 'two', 'lng'))
-					if loc1? and loc2
-						log loc1 + " " + loc2
-						window.boundaryRectangle = L.rectangle([loc1, loc2], {color: "#ff7800", weight: 5, fillOpacity: 0.05, clickable: false})
-						boundaryRectangle.addTo(map)
-						map.on('contextmenu', addMarkerListener)
-				Obs.onClean !->
-					log 'onClean() rectangle'
-					if true
-						map.removeLayer boundaryRectangle if boundaryRectangle?
-						map.off('contextmenu', addMarkerListener)
-			# Info bar
-			Dom.div !->
-				Dom.cls 'infobar'
-				Dom.div !->
-					Dom.style
-						float: 'left'
-						marginRight: '10px'
-						width: '30px'
-						_flexGrow: '0'
-						_flexShrink: '0'
-					Icon.render data: 'info', color: '#fff', size: 30
-				Dom.div !->
-					Dom.style
-						_flexGrow: '1'
-						_flexShrink: '1'
-					if Plugin.agent().android? or Plugin.agent().ios?
-						Dom.text "Tap-and-hold"
-					else
-						Dom.text "Right-click"
-					Dom.text " to place beacon on the map, "
-					if Plugin.agent().android? or Plugin.agent().ios?
-						Dom.text "tap-and-hold"
-					else
-						Dom.text "right-click"
-					Dom.text " a beacon to delete it. Click here for more information."
-				Dom.onTap !->
-					Modal.show tr("Beacon setup information"), !->
-						Dom.div !->
-							if Plugin.agent().android? or Plugin.agent().ios?
-								Dom.text "Tap-and-hold"
-							else
-								Dom.text "Right-click"
-							Dom.text " to place beacon on the map. The circle indicates the capture area for a beacon, players will have to walk to that area to capture the beacon. "
-							if Plugin.agent().android? or Plugin.agent().ios?
-								Dom.text "Tap-and-hold"
-							else
-								Dom.text "Right-click"
-							Dom.text " a beacon to delete it. Be sure to place beacons in places you and other members of this Happening visit often."
-							Dom.br()
-							Dom.br()
-							Dom.text "It is recommended to place at least 10 beacons, depending on how many members this Happening has."
-							Dom.style maxWidth: '300px', textAlign: 'left'
-					, (ok)->
-						ok= undefined;
-					,['ok', tr("Ok")]
-	else
-		renderMap()
-		Dom.div !->
-			Dom.cls 'infobar'
-			Dom.style top: '0', bottom: 'auto'
-			Dom.div !->
-				Dom.style
-					float: 'left'
-					marginRight: '10px'
-					width: '30px'
-					_flexGrow: '0'
-					_flexShrink: '0'
-				Icon.render data: 'info', color: '#fff', style: { paddingRight: '10px'}, size: 30
-			Dom.div !->
-				Dom.style
-					_flexGrow: '1'
-					_flexShrink: '1'
-				Dom.text "The admin/plugin owner is setting up a new game."
-
 # Home page with map
 homePage = !->
 	log 'homePage()'
@@ -824,7 +562,7 @@ homePage = !->
 			Page.setTitle !->
 				Time.deltaText end, "default", (value) !->
 					Dom.text "Conquest has "+value.replace("in ", '')+" left"
-				if (end - Plugin.time()) < 3600
+				if (end - App.time()) < 3600
 					Dom.text "!"
 		else if gameState is 2
 			renderNavigationBar()
@@ -832,7 +570,7 @@ homePage = !->
 			renderBeacons map
 
 			Page.setTitle !->
-				if Db.shared.peek("game", "firstTeam") is Shared.getTeamOfUser(Plugin.userId())
+				if Db.shared.peek("game", "firstTeam") is Shared.getTeamOfUser(App.userId())
 					Dom.text "Your team won!"
 				else
 					Dom.text "Your team lost!"
@@ -848,7 +586,7 @@ performTutorial = !->
 			Dom.div tr("You will be awarded points for capturing a beacon, and for holding it.")
 			Dom.div tr("Tip: Capture all beacons with your team and win in one hour!")
 		, !->
-			Server.sync 'updateTutorialState', Plugin.userId(), 'mainContent', !->
+			Server.sync 'updateTutorialState', App.userId(), 'mainContent', !->
 				Db.personal.set 'tutorialState', 'mainContent', 1
 		, ['ok', tr("Got it")]
 
@@ -890,7 +628,7 @@ renderBeacons = (map) !->
 	log "renderBeacons()"
 	Db.shared.iterate 'game', 'beacons', (beacon) !->
 		teamNumber = beacon.get('owner') ? -1
-		teamColor =  Shared.teams[teamNumber].hex
+		teamColor =  Config.teams[teamNumber].hex
 		location = beacon.get 'location'
 		map.marker location, !->
 			Dom.style
@@ -923,29 +661,29 @@ renderBeacons = (map) !->
 							width: 170
 							anchor: 'bottom'
 							content: !->
-								if (owner = +beacon.peek('owner')) is +Shared.getTeamOfUser(Plugin.userId())
+								if (owner = +beacon.peek('owner')) is +Shared.getTeamOfUser(App.userId())
 									Dom.text tr('Owned by your team')
-									if Shared.beaconHoldScore is 1
-										subtext = tr('Scoring %1 point per hour while held', Shared.beaconHoldScore)
+									if Config.beaconHoldScore is 1
+										subtext = tr('Scoring %1 point per hour while held', Config.beaconHoldScore)
 									else
-										subtext = tr('Scoring %1 points per hour while held', Shared.beaconHoldScore)
+										subtext = tr('Scoring %1 points per hour while held', Config.beaconHoldScore)
 									smallText subtext
 								else if owner is -1
 									Dom.text tr('Neutral beacon')
 								else
-									Dom.text tr('Owned by team %1', Shared.teams[owner].name)
-								if (owner = +beacon.peek('owner')) isnt +Shared.getTeamOfUser(Plugin.userId())
+									Dom.text tr('Owned by team %1', Config.teams[owner].name)
+								if (owner = +beacon.peek('owner')) isnt +Shared.getTeamOfUser(App.userId())
 									smallText tr('Next capture gives %1 points', beacon.peek('captureValue'))
 								selfInRange = false
 								beacon.iterate 'inRange', (player) !->
-									selfInRange = selfInRange || +player.key() is +Plugin.userId()
+									selfInRange = selfInRange || +player.key() is +App.userId()
 								if selfInRange and (inrange = getInRange(beacon))?
 									Dom.text tr('In range players: %1', inrange)
 			Dom.div !->
 				Dom.style
 					width: "22px"
 					height: "40px"
-					background: "50% 100% no-repeat url("+Plugin.resourceUri(teamColor.substring(1) + ".png")+")"
+					background: "50% 100% no-repeat url("+App.resourceUri(teamColor.substring(1) + ".png")+")"
 					backgroundSize: "contain"
 			# Popup trigger
 			Dom.onTap !->
@@ -1017,7 +755,7 @@ renderLocation = (map) !->
 							Dom.style opacity: 0.7
 						else
 							Dom.style opacity: 1
-						Ui.avatar Plugin.userAvatar(Plugin.userId()), size: 42
+						Ui.avatar App.userAvatar(App.userId()), size: 42
 				# Popup trigger
 				Dom.onTap !->
 					if showPopupO.peek() is -1
@@ -1070,7 +808,7 @@ renderLocation = (map) !->
 								backgroundColor: '#0077cf'
 							Dom.cls 'pointerArrow'
 						Dom.div !->
-							avatarKey = Plugin.userAvatar()
+							avatarKey = App.userAvatar()
 							Dom.style
 								width: '50px'
 								height: '50px'
@@ -1128,10 +866,10 @@ renderLocation = (map) !->
 					beaconRadius = Db.shared.peek('game', 'beaconRadius')
 					within = distance - beaconRadius <= 0
 					deviceId = Db.local.peek('deviceId')
-					inRangeValue = beacon.peek('inRange', Plugin.userId(), 'device')
+					inRangeValue = beacon.peek('inRange', App.userId(), 'device')
 					checkinLocation = !->
 						if +Db.shared.peek('gameState') is 1
-							log 'checkinLocation: user='+Plugin.userName()+' ('+Plugin.userId()+'), deviceId='+deviceId+', accuracy='+accuracy+', gameState='+Db.shared.peek('gameState')
+							log 'checkinLocation: user='+App.userName()+' ('+App.userId()+'), deviceId='+deviceId+', accuracy='+accuracy+', gameState='+Db.shared.peek('gameState')
 							Server.send 'checkinLocation', location, deviceId, accuracy
 					if within
 						log 'accuracy='+accuracy+', beaconRadius='+beaconRadius
@@ -1159,9 +897,9 @@ renderLocation = (map) !->
 											Dom.text 'Your accuracy of '+accuracy+' meter is higher than the maximum allowed '+beaconRadius+' meter.'
 						else
 							checkinLocation()
-							log 'Trying beacon takeover: userId='+Plugin.userId()+', location='+beacon.peek('location')+', deviceId='+deviceId
+							log 'Trying beacon takeover: userId='+App.userId()+', location='+beacon.peek('location')+', deviceId='+deviceId
 					else if (not within and inRangeValue? and (inRangeValue is deviceId || inRangeValue is 'true'))
-						log 'Trying stop of beacon takeover: userId='+Plugin.userId()+', location='+beacon.get('location')+', deviceId='+deviceId
+						log 'Trying stop of beacon takeover: userId='+App.userId()+', location='+beacon.get('location')+', deviceId='+deviceId
 						checkinLocation()
 
 
@@ -1183,9 +921,9 @@ getInRange = (beacon) ->
 	players = undefined
 	beacon.iterate 'inRange', (user) !->
 		if players?
-			players = players+', '+Plugin.userName(user.key())
+			players = players+', '+App.userName(user.key())
 		else
-			players = Plugin.userName(user.key())
+			players = App.userName(user.key())
 	return players;
 
 # Render a map marker popup
