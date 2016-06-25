@@ -7,14 +7,11 @@ exports.render = !->
 	Page.setTitle !->
 		Dom.text 'Conquest game events'
 	Event.showStar tr('Game events')
-	Ui.list !->
-		Dom.style
-			padding: '0'
+	Dom.div !->
+		Dom.style MarginPolicy: 'adopt'
 		Db.shared.iterate 'game', 'eventlist', (capture) !->
 			if capture.key() != "maxId"
 				Ui.item !->
-					Dom.style
-						padding: '14px'
 					if capture.peek('type') is "capture"
 						beaconId = capture.peek('beacon')
 						teamId = capture.peek('conqueror')
@@ -110,8 +107,6 @@ exports.render = !->
 								Dom.text "Captured "
 								Time.deltaText capture.peek('timestamp')
 					else if capture.peek('type') is "cancel"
-						Dom.style
-							padding: '14px'
 						Dom.div !->
 							Dom.style
 								width: '70px'

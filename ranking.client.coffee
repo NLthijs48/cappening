@@ -6,9 +6,8 @@ tr = I18n.tr
 exports.render = !->
 	Page.setTitle !->
 		Dom.text 'Conquest ranking'
-	Ui.list !->
-		Dom.style
-			padding: '0'
+	Dom.div !->
+		Dom.style MarginPolicy: 'adopt'
 		Db.shared.iterate 'game', 'teams', (team) !->
 			teamColor = Config.teams[team.key()].hex
 			teamName = Config.teams[team.key()].name
@@ -17,7 +16,6 @@ exports.render = !->
 			expanded = Obs.create(false)
 			Ui.item !->
 				Dom.style
-					padding: '14px'
 					minHeight: '71px'
 					alignItems: 'stretch'
 				Dom.div !->
@@ -50,7 +48,6 @@ exports.render = !->
 					Dom.text "Team " + teamName + " scored " + teamScore + " points"
 					if parseInt(team.key()) is parseInt(Shared.getTeamOfUser(App.userId()))
 						Dom.style fontWeight: 'bold'
-					# To Do expand voor scores
 					if expanded.get() || App.users.count().peek() <= 10
 						team.iterate 'users', (user) !->
 							Dom.div !->

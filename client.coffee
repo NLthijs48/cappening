@@ -1,4 +1,3 @@
-CSS = require 'css'
 Shared = require 'shared'
 Config = Shared.config()
 member = Shared.member()
@@ -6,18 +5,9 @@ Events = require 'events'
 Ranking = require 'ranking'
 tr = I18n.tr
 
-### TODO
-- Reimplement some stat tracking
-- conversion:
-    - lat+lng -> latlong (beacons)
-- client side checkinlocation() throttling (1x per x seconds?)
-- inrangeplayers as avatars in beacon popups?
-- click map to hide popup
-###
-
 showPopupO = Obs.create() # Beacon key or -1 for user popup
 Obs.observe !->
-	if (sPopup = Db.local.get('switchToPopup'))?
+	if (sPopup = Db.local?.get('switchToPopup'))?
 		showPopupO.set sPopup
 		Db.local.remove 'switchToPopup'
 tapFunction = undefined
@@ -215,12 +205,9 @@ addProgressBar = !->
 		order: 0
 		content: !->
 			Db.shared.iterate 'game', 'beacons', (beacon) !->
-				action = beacon.get('action') # Subscribe to changes in action, only thing that matters
-				inRangeValue = beacon.peek('inRange', App.userId(), 'device')
+				action = beacon.get('action')
+				inRangeValue = beacon.get('inRange', App.userId(), 'device')
 				if inRangeValue? and (inRangeValue is 'true' || inRangeValue is Db.local.get('deviceId'))
-					log 'Rendering progress bar'
-					Obs.onClean !->
-						log 'Cleaned progress bar...'
 					dbPercentage = beacon.peek("percentage")
 					nextPercentage = -1
 					ownTeam = Shared.getTeamOfUser(App.userId())
@@ -229,7 +216,9 @@ addProgressBar = !->
 					nextOwner = beacon.peek('nextOwner')
 					actionStarted = beacon.peek("actionStarted")
 					barText = ''
-					if action is "capture"
+					if action is 'none'
+						return
+					else if action is "capture"
 						nextPercentage=100
 						dbPercentage += (new Date() /1000 -actionStarted)/30 * 100
 						if dbPercentage > 100
@@ -327,12 +316,12 @@ addProgressBar = !->
 							background_: 'linear-gradient(to bottom,  rgba(0,0,0,0) 0%,rgba(0,0,0,0.3) 100%)'
 							backgroundColor: nextColor
 							zIndex: "10"
-						# TODO replace this with normal API stuff
-						#Dom._get().style.width = dbPercentage + "%"
-						#Dom._get().style.transition = "width " + time + "ms linear"
-						#window.progressElement = Dom._get()
-						#timer = () !-> window.progressElement.style.width = nextPercentage + "%"
-						#window.setTimeout(timer, 100)
+							width: "#{dbPercentage}%"
+							transition: "width #{time}ms linear"
+						# After initial width is set, set the width to transition to
+						element = Dom.get()
+						Obs.onTime 0, !->
+							element.style width: "#{nextPercentage}%"
 					Dom.div !->
 						Dom.text barText
 						Dom.style
@@ -364,12 +353,17 @@ renderEndGameBar = !->
 					Dom.text "Your team won the game!"
 				else
 					Dom.text "Team " + Config.teams[Db.shared.peek('game', 'firstTeam')].name + " won, good luck next round!"
-			if App.isAdmin()
+			if App.userIsAdmin()
 				Dom.div !->
 					Dom.style
 						height: "36px"
 					Dom.div !->
 						Dom.cls 'restartButton' # hover effect
+						Dom.css
+							'.restartButton:hover':
+								backgroundColor: '#A71963 !important'
+							'.restartButton:active':
+								backgroundColor: '#80134C !important'
 						Dom.style
 							backgroundColor: '#ba1a6e'
 							padding: '8px'
@@ -398,11 +392,11 @@ renderSetupGuidance = !->
 					Flex: true
 					fontSize: '18px'
 					textAlign: 'center'
-				if !App.isAdmin()
+				if !App.userIsAdmin()
 					Dom.text 'The admin is setting up a new game!'
 					return
-				Dom.text 'Setup a game...'
-			if App.isAdmin()
+				Dom.text tr("Place beacons by %1 the map", (if App.agent().ios?||App.agent().android? then 'tapping' else 'clicking'))
+			if App.userIsAdmin()
 				canStart = Obs.create false
 				Obs.observe !->
 					log 'count='+Db.shared.count('game', 'beacons').get()
@@ -432,7 +426,7 @@ renderSetupOptions = !->
 				Dom.div !->
 					Dom.style
 						display: 'inline-block'
-						backgroundColor: if App.isAdmin()  then '#ba1a6e' else '#666'
+						backgroundColor: if App.userIsAdmin()  then '#ba1a6e' else '#666'
 						padding: '8px 12px'
 						margin: '0 0 10px 10px'
 						fontSize: '17px'
@@ -443,7 +437,7 @@ renderSetupOptions = !->
 			renderButton !->
 				Dom.text (Db.shared.get('game', 'numberOfTeams') ? 2) + ' teams'
 				Dom.onTap !->
-					if !App.isAdmin()
+					if !App.userIsAdmin()
 						Modal.show 'Number of teams', 'The admin can change this setting'
 						return
 					if App.users.count().peek() <= 2
@@ -466,7 +460,7 @@ renderSetupOptions = !->
 			renderButton !->
 				Dom.text (Db.shared.get('game', 'roundTimeNumber') ? 7) + ' ' + (Db.shared.get('game', 'roundTimeUnit') ? 'days').toLowerCase()
 				Dom.onTap !->
-					if !App.isAdmin()
+					if !App.userIsAdmin()
 						Modal.show 'Duration of the game', 'The admin can change this setting'
 						return
 					roundTimeNumber = Obs.create Db.shared.peek('game', 'roundTimeNumber')
@@ -546,8 +540,6 @@ homePage = !->
 			renderSetupOptions()
 			renderBeacons map
 			renderAddBeacons map
-			# TODO: render setup stuff
-
 			Page.setTitle 'Setting up the game'
 		else if gameState is 1
 			renderNavigationBar()
@@ -597,22 +589,30 @@ renderMap = ->
 	log "renderMap()"
 	Dom.style padding: "0"
 	gameState = Db.shared.get 'gameState'
+	restoreLocation = Db.local.peek('lastMapLocation')
 	map = Map.render
 		zoom: Db.local.peek('lastMapZoom') ? 12
 		minZoom: 2
 		clustering: true
 		clusterRadius: 45
 		clusterSpreadMultiplier: 2
-		latlong: Db.local.peek('lastMapLocation') ? "52.444553, 5.740644"
+		latlong: (restoreLocation ? "52.444553, 5.740644")
 		onTap: (latlong) !->
 			tapFunction?(latlong)
 		onLongTap: (latlong) !->
 			longTapFunction?(latlong)
 	, (map) !->
+		# No location stored? Show all placed beacons in the viewport
+		if !restoreLocation?
+			locations = []
+			beacons = Db.shared.peek 'beacons'
+			for number,data of beacons
+				locations.push data.location
+			if locations.length > 0
+				map.moveInView locations, 0.2
 		Obs.observe !->
 			# Switch to certain coordinates
 			if (sLatlong = Db.local.get 'switchToMapLocation')? and (sZoom = Db.local.get 'switchToMapZoom')?
-				log 'sLatlong=', sLatlong
 				map.setLatlong sLatlong
 				map.setZoom sZoom
 				Db.local.remove 'switchToMapLocation'
@@ -674,11 +674,26 @@ renderBeacons = (map) !->
 									Dom.text tr('Owned by team %1', Config.teams[owner].name)
 								if (owner = +beacon.peek('owner')) isnt +Shared.getTeamOfUser(App.userId())
 									smallText tr('Next capture gives %1 points', beacon.peek('captureValue'))
-								selfInRange = false
-								beacon.iterate 'inRange', (player) !->
-									selfInRange = selfInRange || +player.key() is +App.userId()
-								if selfInRange and (inrange = getInRange(beacon))?
-									Dom.text tr('In range players: %1', inrange)
+								Obs.observe !->
+									return if beacon.count('inRange').get() is 0
+									Dom.div !->
+										Dom.style Box: 'horizontal middle center', margin: '10px -8px 5px -8px'
+										drawLine = !->
+											Dom.div !->
+												Dom.style
+													borderBottom: '2px solid #BBB'
+													Flex: true
+										drawLine()
+										Dom.div !->
+											Dom.style padding: '0 5px', color: '#999'
+											Dom.text tr('in range')
+										drawLine()
+									Dom.div !->
+										Dom.style
+											Box: 'center'
+										beacon.iterate 'inRange', (playerO) !->
+											Ui.avatar App.userAvatar(playerO.key()),
+												onTap: !-> App.userInfo(playerO.key())
 			Dom.div !->
 				Dom.style
 					width: "22px"
@@ -733,6 +748,7 @@ renderLocation = (map) !->
 			location = state.get('latlong')
 			accuracy = state.get('accuracy')
 			return if !location
+			log '[renderLocation]', location
 			map.marker location, !->
 				Dom.style
 					width: '42px'
@@ -765,17 +781,21 @@ renderLocation = (map) !->
 			radius = accuracy
 			if radius > 1000
 				radius = 1000
+			onTap = undefined
+			# No ontap in the setup state, otherwise you cannot place beacons there
+			if (gameState = Db.shared.get("gameState")) isnt 0
+				onTap = !->
+					if showPopupO.peek() is -1
+						showPopupO.set ''
+					else
+						showPopupO.set -1
 			map.circle location, radius,
 				color: '#FFA200'
 				fillColor: '#FFA200'
 				fillOpacity: 0.1
 				weight: 1
 				opacity: 0.3
-				onTap: !->
-					if showPopupO.peek() is -1
-						showPopupO.set ''
-					else
-						showPopupO.set -1
+				onTap: onTap
 	# Pointer arrow
 	Obs.observe !->
 		addBar
