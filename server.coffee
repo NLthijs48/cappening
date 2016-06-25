@@ -4,6 +4,100 @@ member = Shared.member()
 Config = Shared.config()
 tr = I18n.tr
 
+
+########## SHARED
+#	gameState: <number>
+#		// 0 = setup, user that added plugin selects settings
+#		// 1 = running, game is running
+#		// 2 = ended, game is over, new game can be started
+#	gameNumber: <number> // Current game number, increased when creating a new game
+#	version: <number> // Game version, see onUpgrade() in server.coffee
+#	colors:
+#		<number>: // Team number
+#			name: <name> // blue, red, green, etc.
+#			capitalizedName: <name> // Blue, Red, Green, etc.
+#			hex: <hexadecimal> // #FFFFFF, etc.
+#	maxDeviceId: <number> // Maximum device id that is assigned (next to assign is +1)
+#	lastNotification: // Last notification about close to beacon (background location)
+#		<id>: <timestamp> // Time of last notification to user with <id>
+#	game: // Contains all information about the current game
+#		roundTime: <number> // Round time in seconds
+#		numberOfTeams: <number> // Number of teams to create
+#		beaconRadius: <number> // Radius of beacons in meters
+#		roundTimeNumber: <number> // Number for the round time
+#		roundTimeUnit: <word> // Time unit currently selected
+#		startTime: <timestamp> // Start time of the game
+#		endTime: <timestamp> // Original entime of the game
+#		newEndTime: <timestamp> // New endtime of the game incase all beacons are captured
+#		bounds: // Area that the game will be played in
+#			one: <latlong>
+#			two: <latlong>
+#		beacons:
+#			<number>: // Increasing unique number
+#				location: <latlong>
+#				owner: <teamnumber> // Team that currently owns the beacon
+#				captureValue: <value for takeover> // Number of points for the next capture
+#				actionStarted: <timestamp> // Time that capture or neutralize started
+#				action: <none|capture|neutralize> // Current action
+#				nextOwner: <teamnumber>
+#				percentage: <0-100> // Only updated when the inRange list changes
+#					// ‘action’ and ‘actionStarted’ can be used to predict the current percentage
+#				inRange: // List with userIds that are in range of this beacon
+#					<userId>: // If an entry for a userId exists then he is in range
+#						device: <deviceId> // Device id for this entry of the user
+#						time: <timestamp> // Last time this inRange has been confirmed
+#		teams:
+#			<number>: // Increasing unique number, same number as colors<number>
+#				teamScore: <number> // Timebased on number of beacons held by team <number>
+#				captured: <number> // Number of beacons captured in this game
+#				neutralized: <number> // Number of beacons neutralized in this game
+#				ranking: <number> // Ranking this team has currently (determined by scores)
+#				users:
+#					<id>: // Unique name (userId), get actual name with Plugin.username()
+#						userScore: <score>
+#						userName: <name> // Name of the player for debug, not to be used for display, use Plugin.userName(<id>) instead
+#						captured: <number> // Number of beacons captured in this game
+#						neutralized: <number> // Number of beacons neutralized in this game
+#		eventlist:
+#			maxId: <number>
+#			<number>: // Increasing unique number or timestamp
+#				timestamp: <timestamp> // Seconds since 1970
+#				type: <type> // score, capture, captureAll, cancel, end, start
+#				beacon: <beaconId>
+#				conqueror: <teamId>
+#				leading: <teamId>
+#				members: <userIdString> // String of userids, separated by ‘, ’
+#		firstTeam: <teamnumber>
+
+########## BACKEND
+#	collectionRegistered: <true> // Indicates this plugin has registered with the collector
+#	history: // Contains old games
+#		groupCode: <code>	// Groupcode (used as unique identifier)
+#		players: <number> // Number of players in the Happening
+#		<number>: // Increasing unique number
+#		<gameState>
+#				<all information like below the game node>
+
+########## PERSONAL
+#	lastNotification:
+#		recieved: <time> // time in millieseconds
+#		beaconNumber: <beaconId> //number of beacon where notification was sent for
+#	tutorialState:	//Indicates which tutorialcontent the user has already seen
+#		<content>: 1
+
+########## LOCAL
+#	currentSetupPage: <name> // The page the user is on, used for the setup pages
+#				// ‘setup’ + number from ‘setupPhase’ node
+#	gameNumber: <number> // Current gameNumber the client knows of, used to reset things
+#		// after a game
+#	deviceId: <number> // Unique id of this device, used for multiple inRange for same client
+#	lastMapLocation: <latlong> // Keeps last map location, is restored when restarting the app
+#	lastMapZoom: <number> // Keeps last map zoom, is restored when restarting the app
+#	switchToMapLocation: <latlong> // Switch to this location when rendering the map
+#	switchToMapZoom: <number>
+#	switchToPopup: <number>
+
+
 # ==================== Events ====================
 # Game install
 exports.onInstall = !->
@@ -17,24 +111,11 @@ exports.onUpgrade = !->
 	newVersion = version
 	if not version?
 		version = 0
-	# Version checking
-	if version < 10
-		newVersion = 10
-		Db.shared.remove 'history'
-	if version < 12
-		newVersion = 12
-		Db.backend.remove('collectionRegistered')
-
-	if version <13
-		newVersion = 13
-		for userId in App.userIds()
-			Db.personal(userId).remove 'location'
 
 	# Write new version to the database
 	if newVersion isnt version
 		log "[onUpgrade] Upgraded from version #{version} to #{newVersion}"
 		Db.shared.set 'version', newVersion
-	#registerPlugin()
 
 # Config changes (by admin or plugin owner)
 exports.onConfig = (config) !->
