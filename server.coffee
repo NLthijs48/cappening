@@ -1,4 +1,3 @@
-MD5 = require 'md5' # MD5 library (packed with the plugin)
 Shared = require 'shared'
 member = Shared.member()
 Config = Shared.config()
@@ -62,7 +61,6 @@ tr = I18n.tr
 #		firstTeam: <teamnumber>
 
 ########## BACKEND
-#	collectionRegistered: <true> // Indicates this plugin has registered with the collector
 #	history: // Contains old games
 #		groupCode: <code>	// Groupcode (used as unique identifier)
 #		players: <number> // Number of players in the Happening
@@ -803,29 +801,3 @@ moveData = !->
 	if current? and parseInt(Db.shared.peek('game', 'gameState')) isnt 0
 		Db.backend.set 'history', current,'game', Db.shared.peek('game')
 		Db.backend.set 'history', current, 'gameState', Db.shared.peek('gameState')
-
-
-################## STATS COLLECTION
-# Check response on http request and set registered to true
-exports.response = !->
-	log '[response] registered to data plugin'
-	Db.backend.set('collectionRegistered', 'true')
-
-# When http with correct key is recieved database is send
-exports.onHttp = (request) !->
-	if request.data?
-		if MD5.externmd5(request.data) is Config.onHTTPKey
-			moveData()
-			request.respond 200, JSON.stringify(Db.backend.peek('history'))
-			log '[onHTTP] succesfully sent database, id='+App.groupCode()
-			return 0
-	request.respond 200, 'wrong key'
-	log '[onHTTP] failed attempt to sent database'
-
-# Called when plugin is installed. This function sends request to data collection App.
-registerPlugin = !->
-	if !(Db.backend.peek('collectionRegistered')?)
-		Http.post
-			url: 'https://happening.im/x/2489x'
-			data: App.groupCode()
-			name: 'response'
