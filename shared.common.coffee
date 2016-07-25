@@ -19,7 +19,7 @@ config =
 			hex: '#3882b6'
 		1:
 			name: 'green'
-			capitalizedName: 'Green',
+			capitalizedName: 'Green'
 			hex: '#009F22'
 		2:
 			name: 'orange'

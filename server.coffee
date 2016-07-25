@@ -12,11 +12,6 @@ tr = I18n.tr
 #		// 2 = ended, game is over, new game can be started
 #	gameNumber: <number> // Current game number, increased when creating a new game
 #	version: <number> // Game version, see onUpgrade() in server.coffee
-#	colors:
-#		<number>: // Team number
-#			name: <name> // blue, red, green, etc.
-#			capitalizedName: <name> // Blue, Red, Green, etc.
-#			hex: <hexadecimal> // #FFFFFF, etc.
 #	maxDeviceId: <number> // Maximum device id that is assigned (next to assign is +1)
 #	lastNotification: // Last notification about close to beacon (background location)
 #		<id>: <timestamp> // Time of last notification to user with <id>
@@ -29,9 +24,6 @@ tr = I18n.tr
 #		startTime: <timestamp> // Start time of the game
 #		endTime: <timestamp> // Original entime of the game
 #		newEndTime: <timestamp> // New endtime of the game incase all beacons are captured
-#		bounds: // Area that the game will be played in
-#			one: <latlong>
-#			two: <latlong>
 #		beacons:
 #			<number>: // Increasing unique number
 #				location: <latlong>
@@ -101,6 +93,7 @@ tr = I18n.tr
 # ==================== Events ====================
 # Game install
 exports.onInstall = !->
+	Db.shared.set 'version', 100
 	initializeGame()
 
 # Game update
@@ -111,6 +104,32 @@ exports.onUpgrade = !->
 	newVersion = version
 	if not version?
 		version = 0
+
+	# Update legacy Javascript version to new one
+	if version < 100
+		newVersion = 100
+		upgradeLocation = (pathO) !->
+			return if !(p=pathO.peek())? or typeof p isnt 'object'
+			lat = pathO.peek 'lat'
+			lng = pathO.peek 'lng'
+			if lat? and lng?
+				pathO.set lat+","+lng
+			else
+				log '[onUpgrade] could not convert path', pathO.key(), 'data:', pathO.peek()
+		if Db.shared.peek('game', 'beacons')?
+			Db.shared.iterate 'game', 'beacons', (beaconO) !->
+				upgradeLocation beaconO.ref 'location'
+		upgradeLocation Db.shared.ref('game', 'bounds', 'one')
+		upgradeLocation Db.shared.ref('game', 'bounds', 'two')
+
+		Db.backend.iterate 'history', (historyO) !->
+			if historyO.peek('game', 'beacons')
+				historyO.iterate 'game', 'beacons', (beaconO) !->
+					upgradeLocation beaconO.ref 'location'
+			upgradeLocation historyO.ref('game', 'bounds', 'one')
+			upgradeLocation historyO.ref('game', 'bounds', 'two')
+
+		log '[onUpgrade] Upgraded legacy Javascript version to API version'
 
 	# Write new version to the database
 	if newVersion isnt version
